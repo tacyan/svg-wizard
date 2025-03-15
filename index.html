@@ -3,14 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>画像SVG変換ツール</title>
+    <title>SVG Wizard - 高品質な画像からSVGへの変換ツール</title>
     <link rel="stylesheet" href="styles.css">
+    <meta name="description" content="JPG、PNG、GIF、WebP画像を高品質なSVGベクター形式に変換します。レイヤー分離、Illustrator互換出力に対応。">
+    <!-- ファビコン -->
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <!-- 追加のメタタグ -->
+    <meta name="keywords" content="SVG変換, 画像からSVG, ベクター変換, ウェブツール, イラストレーター互換">
+    <meta name="author" content="SVG Wizard Team">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>画像SVG変換ツール</h1>
-            <p>JPG、PNG、GIF、WebP画像をSVG形式に変換します</p>
+            <h1>SVG Wizard</h1>
+            <p>画像を高品質なSVGに変換</p>
         </header>
 
         <main>
@@ -24,156 +30,215 @@
             </div>
 
             <div class="settings-container" id="settings-container" style="display: none;">
-                <h3>変換設定</h3>
-                <div class="settings-group threshold-container">
-                    <label for="threshold-range">閾値: <span id="threshold-value">128</span></label>
-                    <input type="range" id="threshold-range" min="1" max="255" value="128">
-                    <div class="settings-description">閾値は白黒変換時の明暗の境界値を決定します</div>
-                </div>
+                <h2>変換設定</h2>
                 <div class="settings-group">
-                    <label for="color-mode">カラーモード:</label>
-                    <select id="color-mode">
-                        <option value="color">カラー</option>
-                        <option value="bw">白黒</option>
-                    </select>
-                    <div class="settings-description">カラーモードは変換結果の色表現を決定します</div>
-                </div>
-                <div class="settings-group">
-                    <label for="simplify-range">単純化: <span id="simplify-value">0.5</span></label>
-                    <input type="range" id="simplify-range" min="0" max="1" step="0.1" value="0.5">
-                    <div class="settings-description">単純化はSVGパスの複雑さを調整します（値が大きいほど単純）</div>
-                </div>
-                <div class="settings-group color-quantization-container">
-                    <label for="color-quantization-range">色の数: <span id="color-quantization-value">16</span></label>
-                    <input type="range" id="color-quantization-range" min="2" max="64" value="16">
-                    <div class="settings-description">カラーモード時の最大色数を制限します（少ないほどファイルサイズが小さく）</div>
-                </div>
-                <div class="settings-group">
-                    <label for="blur-radius-range">ブラー: <span id="blur-radius-value">0</span></label>
-                    <input type="range" id="blur-radius-range" min="0" max="5" step="0.1" value="0">
-                    <div class="settings-description">変換前にブラーをかけてノイズを減らします</div>
-                </div>
-                <div class="settings-group stroke-width-container">
-                    <label for="stroke-width-range">ストローク幅: <span id="stroke-width-value">0</span></label>
-                    <input type="range" id="stroke-width-range" min="0" max="5" step="0.1" value="0">
-                    <div class="settings-description">白黒モード時のパスの線幅を設定します（0は塗りつぶし）</div>
-                </div>
-                <div class="settings-group">
-                    <div class="checkbox-container">
-                        <input type="checkbox" id="enable-layers" checked>
-                        <label for="enable-layers">レイヤー分割を有効化</label>
+                    <h3>基本設定</h3>
+                    <div class="settings-items">
+                        <div class="settings-item">
+                            <label for="color-mode">カラーモード:</label>
+                            <select id="color-mode">
+                                <option value="color">カラー</option>
+                                <option value="bw">白黒</option>
+                            </select>
+                            <div class="settings-description">カラーモードを選択します。</div>
+                        </div>
+                        <div class="threshold-container">
+                            <div class="settings-item">
+                                <label for="threshold-range">閾値:</label>
+                                <div class="range-container">
+                                    <input type="range" id="threshold-range" min="1" max="255" value="128" class="slider">
+                                    <span id="threshold-value">128</span>
+                                </div>
+                                <div class="settings-description">白黒変換時の明るさの閾値を設定します。</div>
+                            </div>
+                        </div>
+                        <div class="settings-item">
+                            <label for="simplify-range">単純化:</label>
+                            <div class="range-container">
+                                <input type="range" id="simplify-range" min="0" max="10" step="0.1" value="0.5" class="slider">
+                                <span id="simplify-value">0.5</span>
+                            </div>
+                            <div class="settings-description">SVGパスの単純化レベルを調整します。</div>
+                        </div>
                     </div>
-                    <div class="settings-description">色ごとに個別のレイヤーに分割し、後から編集可能にします</div>
                 </div>
-                <div class="settings-group layer-options-container">
-                    <label for="layer-naming">レイヤー名付け:</label>
-                    <select id="layer-naming">
-                        <option value="color">色に基づく</option>
-                        <option value="index">インデックスに基づく</option>
-                    </select>
-                    <div class="settings-description">レイヤーの命名方法を選択します</div>
+                <div class="settings-group">
+                    <h3>カラー設定</h3>
+                    <div class="settings-items">
+                        <div class="color-quantization-container">
+                            <div class="settings-item">
+                                <label for="color-quantization-range">色の数:</label>
+                                <div class="range-container">
+                                    <input type="range" id="color-quantization-range" min="2" max="64" value="16" class="slider">
+                                    <span id="color-quantization-value">16</span>
+                                </div>
+                                <div class="settings-description">SVGで使用する色の数を制限します。</div>
+                            </div>
+                        </div>
+                        <div class="settings-item">
+                            <label for="blur-radius-range">ぼかし効果:</label>
+                            <div class="range-container">
+                                <input type="range" id="blur-radius-range" min="0" max="5" step="0.1" value="0" class="slider">
+                                <span id="blur-radius-value">0</span>
+                            </div>
+                            <div class="settings-description">変換前に画像をぼかして滑らかにします。</div>
+                        </div>
+                        <div class="stroke-width-container">
+                            <div class="settings-item">
+                                <label for="stroke-width-range">ストローク幅:</label>
+                                <div class="range-container">
+                                    <input type="range" id="stroke-width-range" min="0" max="5" step="0.1" value="0" class="slider">
+                                    <span id="stroke-width-value">0</span>
+                                </div>
+                                <div class="settings-description">白黒モードでのSVGパスの太さを設定します。</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-group">
+                    <h3>レイヤー設定</h3>
+                    <div class="settings-items">
+                        <div class="settings-item">
+                            <label for="enable-layers">レイヤー分離:</label>
+                            <input type="checkbox" id="enable-layers" checked>
+                            <div class="settings-description">色ごとに個別のレイヤーに分離します。</div>
+                        </div>
+                        <div class="layer-options-container">
+                            <div class="settings-item">
+                                <label for="layer-naming">レイヤー命名:</label>
+                                <select id="layer-naming">
+                                    <option value="color">色情報</option>
+                                    <option value="index">インデックス</option>
+                                    <option value="auto">自動検出</option>
+                                </select>
+                                <div class="settings-description">レイヤーの命名方法を選択します。</div>
+                            </div>
+                        </div>
+                        <div class="illustrator-compat-container">
+                            <div class="settings-item">
+                                <label for="illustrator-compat">Illustrator互換:</label>
+                                <input type="checkbox" id="illustrator-compat" checked>
+                                <div class="settings-description">Adobe Illustratorでレイヤーとして認識される形式で出力します。</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             <div class="preview-container" id="preview-container" style="display: none;">
-                <div class="preview-section">
-                    <h3>元の画像</h3>
-                    <div class="image-preview">
-                        <img id="original-image" src="" alt="元の画像">
+                <h2>プレビュー</h2>
+                <div class="preview-flex">
+                    <div class="preview-column">
+                        <h3>元画像</h3>
+                        <div class="image-preview">
+                            <img id="original-image" alt="元の画像プレビュー">
+                        </div>
+                    </div>
+                    <div class="preview-column">
+                        <h3>SVG出力</h3>
+                        <div class="svg-preview-container">
+                            <div id="svg-preview"></div>
+                        </div>
                     </div>
                 </div>
-                
-                <div class="preview-section">
-                    <h3>SVG変換プレビュー</h3>
-                    <div class="svg-preview" id="svg-preview">
-                        <!-- SVGがここに表示されます -->
+                <div id="layers-container" style="display: none;">
+                    <h3>レイヤー管理</h3>
+                    <div class="layers-actions">
+                        <button id="show-all-layers" class="action-button">すべて表示</button>
+                        <button id="hide-all-layers" class="action-button">すべて非表示</button>
+                    </div>
+                    <div id="layers-list">
+                        <!-- レイヤーアイテムがここに動的に追加されます -->
                     </div>
                 </div>
-            </div>
-
-            <!-- レイヤー管理パネル（新規追加） -->
-            <div class="layers-container" id="layers-container" style="display: none;">
-                <h3>レイヤー管理</h3>
-                <div class="layers-controls">
-                    <button id="show-all-layers" class="layer-button">すべて表示</button>
-                    <button id="hide-all-layers" class="layer-button">すべて非表示</button>
-                </div>
-                <div class="layers-list" id="layers-list">
-                    <!-- レイヤー項目がここに動的に追加されます -->
+                <div class="code-container">
+                    <h3>SVGコード</h3>
+                    <pre id="svg-code"></pre>
                 </div>
             </div>
 
             <div class="progress-container" id="progress-container" style="display: none;">
-                <div class="progress-bar">
-                    <div class="progress" id="progress-bar"></div>
+                <div id="progress-bar-container">
+                    <div id="progress-bar"></div>
                 </div>
-                <p id="progress-text">変換中... 0%</p>
+                <div id="progress-text">変換中... 0%</div>
             </div>
 
             <div class="control-panel" id="control-panel" style="display: none;">
-                <button id="convert-btn" class="convert-button">変換実行</button>
-                <button id="download-btn" class="download-button">SVGをダウンロード</button>
-                <button id="reset-btn" class="reset-button">リセット</button>
-                <details>
-                    <summary>SVGコード</summary>
-                    <pre id="svg-code" class="svg-code"></pre>
-                </details>
+                <button id="convert-btn" class="primary-button">SVGに変換</button>
+                <button id="download-btn" class="action-button" disabled>SVGをダウンロード</button>
+                <button id="reset-btn" class="action-button">リセット</button>
             </div>
         </main>
 
         <footer>
-            <p>© 2025 画像SVG変換ツール - プライバシーを考慮した完全クライアントサイド処理</p>
+            <p>&copy; 2023 SVG Wizard - 画像をSVGに簡単変換</p>
+            <p class="footer-note">JPG、PNG、GIF、WebP画像をSVGベクター形式に変換できます。処理はすべてブラウザ上で行われ、データがサーバーに送信されることはありません。</p>
         </footer>
     </div>
 
     <!-- Potraceライブラリ -->
     <script>
-        // Potraceライブラリの読み込み状態を確認するためのフラグ
+        // Potraceライブラリの読み込み状態を管理する変数
         window.potraceLoaded = false;
-        
-        // Potraceライブラリの読み込み試行回数
         let potraceLoadAttempts = 0;
-        const maxPotraceLoadAttempts = 3;
+        const MAX_LOAD_ATTEMPTS = 3;
         
-        // Potraceライブラリの読み込みが成功した場合の処理
+        // Potraceライブラリの読み込み成功時のコールバック
         function potraceLoadSuccess() {
-            console.log('Potraceライブラリの読み込みが成功しました');
+            console.log('Potraceライブラリの読み込みに成功しました');
             window.potraceLoaded = true;
         }
         
-        // Potraceライブラリの読み込みが失敗した場合の処理
+        // Potraceライブラリの読み込み失敗時のコールバック
         function potraceLoadError() {
-            potraceLoadAttempts++;
-            console.warn(`Potraceライブラリの読み込みに失敗しました (${potraceLoadAttempts}/${maxPotraceLoadAttempts})。`);
+            console.error('Potraceライブラリの読み込みに失敗しました（試行回数: ' + potraceLoadAttempts + '）');
             
-            if (potraceLoadAttempts < maxPotraceLoadAttempts) {
-                // 別のCDNソースから再試行
-                console.log('別のソースからPotraceライブラリを読み込み直します...');
-                setTimeout(loadPotraceLibrary, 1000);
+            if (potraceLoadAttempts < MAX_LOAD_ATTEMPTS) {
+                console.log('別のソースからの読み込みを試みます');
+                loadPotraceLibrary();
             } else {
-                console.warn('Potraceライブラリの読み込みを諦めました。代替処理が使用されます。');
+                console.error('最大試行回数を超えました。フォールバックモードで動作します');
+                // 失敗時にフォールバックモードを有効化
+                window.potraceFallbackMode = true;
             }
         }
         
         // Potraceライブラリの読み込み関数
         function loadPotraceLibrary() {
-            const sources = [
+            potraceLoadAttempts++;
+            
+            // 読み込むCDNソースのリスト
+            const potraceSources = [
                 'https://cdn.jsdelivr.net/npm/potrace@2.1.8/potrace.min.js',
                 'https://unpkg.com/potrace@2.1.8/potrace.min.js',
-                'https://cdnjs.cloudflare.com/ajax/libs/potrace/2.1.8/potrace.min.js'
+                'libs/potrace.min.js' // ローカルフォールバック
             ];
             
+            const sourceIndex = potraceLoadAttempts - 1;
+            if (sourceIndex >= potraceSources.length) {
+                potraceLoadError();
+                return;
+            }
+            
+            const source = potraceSources[sourceIndex];
+            console.log(`Potraceライブラリの読み込み試行 (${potraceLoadAttempts}): ${source}`);
+            
             const script = document.createElement('script');
-            script.src = sources[potraceLoadAttempts % sources.length];
+            script.src = source;
             script.onload = potraceLoadSuccess;
             script.onerror = potraceLoadError;
-            document.body.appendChild(script);
+            document.head.appendChild(script);
         }
         
-        // 初回読み込み
+        // Potraceライブラリの読み込みを開始
         loadPotraceLibrary();
     </script>
-    <script src="imagetracer.js"></script>
+    <script src="js/utils/imagetracer-utils.js"></script>
+    <script src="js/core/imagetracer-core.js"></script>
+    <script src="js/layers/imagetracer-layers.js"></script>
+    <script src="js/ui/imagetracer-ui.js"></script>
+    <script src="js/imagetracer-main.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

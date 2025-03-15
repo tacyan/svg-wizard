@@ -9,11 +9,137 @@
  * - 変換進捗の表示
  * - 元画像とSVG変換結果のプレビュー表示
  * - レイヤーごとの編集（色変更、表示/非表示）
+ * - イラストレーター互換SVG出力
  * - 変換されたSVGファイルのダウンロード
  * - 変換パラメータのカスタマイズ
  * 
- * @version 3.0.0
+ * @version 3.5.1
  */
+
+/**
+ * 進捗状況を更新します
+ * @param {string} stage - 現在の処理段階
+ * @param {number} percent - 進捗率（0-100）
+ */
+function updateProgressUI(stage, percent) {
+  const progressBar = document.getElementById('progress-bar');
+  const progressText = document.getElementById('progress-text');
+  
+  if (progressBar && progressText) {
+    progressBar.style.width = percent + '%';
+    progressText.textContent = `${stage}... ${Math.round(percent)}%`;
+  }
+}
+
+/**
+ * エラーメッセージを表示します
+ * @param {string} message - エラーメッセージ
+ * @param {string} action - アクションボタンテキスト
+ */
+function showErrorMessage(message, action) {
+  // SVGプレビューエリアを取得
+  const svgPreview = document.getElementById('svg-preview');
+  if (!svgPreview) return;
+  
+  // 以前のエラーメッセージをクリア
+  const oldError = document.querySelector('.error-message');
+  if (oldError) {
+    oldError.remove();
+  }
+  
+  // エラーメッセージ要素を作成
+  const errorDiv = document.createElement('div');
+  errorDiv.className = 'error-message fade-in';
+  
+  // アイコン
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'icon';
+  iconSpan.innerHTML = '&#9888;'; // 警告アイコン
+  errorDiv.appendChild(iconSpan);
+  
+  // メッセージ
+  const messageSpan = document.createElement('span');
+  messageSpan.className = 'message';
+  messageSpan.textContent = message;
+  errorDiv.appendChild(messageSpan);
+  
+  // アクションボタン（指定されている場合）
+  if (action) {
+    const button = document.createElement('button');
+    button.className = 'action-button';
+    button.textContent = action;
+    button.onclick = function() {
+      // リセットボタンと同様の動作
+      window.resetUI && window.resetUI();
+    };
+    errorDiv.appendChild(button);
+  }
+  
+  // SVGプレビューエリアに表示
+  svgPreview.innerHTML = '';
+  svgPreview.appendChild(errorDiv);
+  
+  // SVGコード表示をクリア
+  const svgCode = document.getElementById('svg-code');
+  if (svgCode) {
+    svgCode.textContent = 'エラーが発生しました。';
+  }
+  
+  // コンソールにもエラーを出力
+  console.error('SVG変換エラー:', message);
+  
+  // ダウンロードボタンを無効化
+  const downloadBtn = document.getElementById('download-btn');
+  if (downloadBtn) {
+    downloadBtn.disabled = true;
+  }
+}
+
+/**
+ * SVG変換メソッドをラップして安全に実行
+ * @param {File} file - 変換する画像ファイル
+ * @param {Object} options - 変換オプション
+ * @returns {Promise<string>} SVGデータ
+ */
+function safeSvgConversion(file, options) {
+  return new Promise((resolve, reject) => {
+    try {
+      // 進捗表示を更新するための関数
+      const progressCallback = function(stage, percent) {
+        updateProgressUI(stage, percent);
+      };
+      
+      // オプションに進捗コールバックを追加
+      options.progressCallback = progressCallback;
+      
+      // タイムアウト処理を追加
+      const timeout = setTimeout(() => {
+        reject(new Error('変換処理がタイムアウトしました。大きすぎる画像やシステムリソースの制限により処理に失敗した可能性があります。'));
+      }, 60000); // 60秒でタイムアウト
+      
+      // ImageTracerを使用してSVGに変換
+      ImageTracer.fileToSVG(file, options, function(error, svgData) {
+        clearTimeout(timeout);
+        
+        if (error) {
+          reject(error);
+          return;
+        }
+        
+        // SVGデータの整合性チェック
+        if (!svgData || svgData.trim() === '' || 
+            !svgData.includes('<svg') || !svgData.includes('</svg>')) {
+          reject(new Error('SVGデータの生成に失敗しました。不完全なSVGが生成されました。'));
+          return;
+        }
+        
+        resolve(svgData);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
 
 // DOMが読み込まれた後に実行
 document.addEventListener('DOMContentLoaded', () => {
@@ -53,6 +179,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const strokeWidthRange = document.getElementById('stroke-width-range');
   const strokeWidthValue = document.getElementById('stroke-width-value');
   const enableLayersCheckbox = document.getElementById('enable-layers');
+  const layerNamingSelect = document.getElementById('layer-naming');
+  const illustratorCompatCheckbox = document.getElementById('illustrator-compat');
   
   // 現在のファイルとSVGデータの保存用変数
   let currentFile = null;
@@ -178,6 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
       controlPanel.style.display = 'flex';
       downloadBtn.disabled = true;
       downloadBtn.style.opacity = '0.5';
+      downloadBtn.style.cursor = 'not-allowed';
     };
     
     // 画像のロードエラー処理
@@ -238,8 +367,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // レイヤー設定の表示/非表示
     if (enableLayersCheckbox) {
       // レイヤー有効/無効の切り替え時に関連する設定を表示/非表示
-      document.querySelector('.layer-options-container').style.display = 
-        enableLayersCheckbox.checked ? 'block' : 'none';
+      const layerOptionsContainer = document.querySelector('.layer-options-container');
+      const aiCompatContainer = document.querySelector('.illustrator-compat-container');
+      
+      if (layerOptionsContainer) {
+        layerOptionsContainer.style.display = enableLayersCheckbox.checked ? 'block' : 'none';
+      }
+      
+      if (aiCompatContainer) {
+        aiCompatContainer.style.display = enableLayersCheckbox.checked ? 'block' : 'none';
+      }
     }
   }
   
@@ -388,138 +525,130 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   
   /**
-   * 画像をSVGに変換する
+   * SVGへの変換を実行します
    */
   async function convertToSVG() {
-    if (!currentFile || isConverting) return;
+    if (!currentFile) {
+      alert('変換する画像ファイルを選択してください。');
+      return;
+    }
     
-    isConverting = true;
-    console.log('SVG変換開始:', currentFile.name);
+    // 進捗表示を表示
+    document.getElementById('progress-container').style.display = 'block';
+    updateProgressUI('変換準備中', 0);
     
-    // 変換オプション
+    // 変換オプションを取得
     const options = {
-      threshold: parseInt(thresholdRange.value),
-      colorMode: colorMode.value,
-      simplify: parseFloat(simplifyRange.value),
-      scale: 1,
-      maxImageSize: 2000 // 2000px以上の画像はリサイズ
+      colorMode: document.getElementById('color-mode').value,
+      threshold: parseInt(document.getElementById('threshold-range').value, 10),
+      simplify: parseFloat(document.getElementById('simplify-range').value),
+      colorQuantization: parseInt(document.getElementById('color-quantization-range').value, 10),
+      blurRadius: parseFloat(document.getElementById('blur-radius-range').value),
+      strokeWidth: parseFloat(document.getElementById('stroke-width-range').value),
+      enableLayers: document.getElementById('enable-layers').checked,
+      layerNaming: document.getElementById('layer-naming').value,
+      illustratorCompat: document.getElementById('illustrator-compat').checked,
+      maxImageSize: 2000
     };
     
-    // 追加オプションの設定
-    if (colorQuantizationRange) {
-      options.colorQuantization = parseInt(colorQuantizationRange.value);
-    }
-    
-    if (blurRadiusRange) {
-      options.blurRadius = parseFloat(blurRadiusRange.value);
-    }
-    
-    if (strokeWidthRange && colorMode.value === 'bw') {
-      options.strokeWidth = parseFloat(strokeWidthRange.value);
-    }
-    
-    // レイヤー機能の有効/無効
-    if (enableLayersCheckbox) {
-      options.enableLayers = enableLayersCheckbox.checked;
-    }
-    
-    // ダウンロードボタンを無効化
-    downloadBtn.disabled = true;
-    downloadBtn.style.opacity = '0.5';
-    
-    // 変換ボタンを非活性化
-    convertBtn.disabled = true;
-    convertBtn.style.opacity = '0.5';
-    
-    // 進捗バーを表示
-    progressContainer.style.display = 'block';
-    updateProgress(0);
+    // コンソールにファイル情報と変換設定を出力
+    console.log('変換ファイル:', currentFile);
+    console.log('変換設定:', options);
     
     try {
-      // 変換処理の開始
-      const result = await ImageTracer.fileToSVG(
-        currentFile,
-        options,
-        updateProgress
-      );
+      // 安全なSVG変換を実行
+      const svgData = await safeSvgConversion(currentFile, options);
       
-      console.log('SVG変換完了:', currentFile.name);
+      // SVGプレビューとコードを更新
+      updateSvgPreview(svgData);
+      updateSvgCodeDisplay(svgData);
       
-      // レイヤー対応の結果形式かどうかをチェック
-      if (result && typeof result === 'object' && result.svg) {
-        // レイヤー対応のデータ形式
-        currentSvgData = result.svg;
+      // レイヤー情報を取得して表示
+      if (options.enableLayers) {
+        const layersList = document.getElementById('layers-list');
+        const layersContainer = document.getElementById('layers-container');
         
-        // レイヤーリストを更新
-        if (result.layers) {
-          updateLayersList(result.layers);
+        try {
+          // レイヤー情報を抽出
+          const layers = ImageTracer.extractLayers(svgData);
+          
+          // レイヤーリストを更新
+          if (layers && layers.length > 0) {
+            updateLayersList(layers);
+            layersContainer.style.display = 'block';
+          } else {
+            layersContainer.style.display = 'none';
+          }
+        } catch (layerError) {
+          console.error('レイヤー情報の抽出に失敗しました:', layerError);
+          layersContainer.style.display = 'none';
         }
       } else {
-        // 従来の文字列形式のSVGデータ
-        currentSvgData = result;
-        
-        // SVGからレイヤー情報を抽出（可能な場合）
-        try {
-          const extractedLayers = ImageTracer.extractLayers(currentSvgData);
-          if (extractedLayers.length > 0) {
-            updateLayersList(extractedLayers);
-          }
-        } catch (e) {
-          console.warn('レイヤー情報の抽出に失敗しました:', e);
-        }
+        document.getElementById('layers-container').style.display = 'none';
       }
       
-      // SVG文字列の整合性チェック
-      if (!currentSvgData || !currentSvgData.startsWith('<svg') || !currentSvgData.endsWith('</svg>')) {
-        throw new Error('SVGデータの生成に失敗しました。不完全なSVGが生成されました。');
-      }
-      
-      // SVGプレビューの表示
-      svgPreview.innerHTML = currentSvgData;
-      
-      // SVGコードの表示を更新
-      updateSvgCodeDisplay(currentSvgData);
+      // 進捗表示を非表示
+      setTimeout(() => {
+        document.getElementById('progress-container').style.display = 'none';
+      }, 500);
       
       // ダウンロードボタンを有効化
-      downloadBtn.disabled = false;
-      downloadBtn.style.opacity = '1';
+      const downloadBtn = document.getElementById('download-btn');
+      if (downloadBtn) {
+        downloadBtn.disabled = false;
+        downloadBtn.style.opacity = '1.0';
+        downloadBtn.style.cursor = 'pointer';
+      }
       
+      // 変換成功メッセージ
+      console.log('SVG変換が完了しました');
     } catch (error) {
       console.error('SVG変換エラー:', error);
       
       // エラーメッセージを表示
-      svgPreview.innerHTML = `
-        <div style="padding: 20px; background-color: #fff0f0; border: 1px solid #ffcccc; border-radius: 4px;">
-          <h3 style="color: #cc0000;">変換エラー</h3>
-          <p>${error.message || 'SVGへの変換中にエラーが発生しました。'}</p>
-          <p>別の画像や設定で再試行してください。</p>
-        </div>
-      `;
+      showErrorMessage(
+        error.message || 'SVGへの変換中にエラーが発生しました。', 
+        '別の画像や設定で再試行してください'
+      );
       
-      svgCode.textContent = `/* 変換エラー: ${error.message} */`;
-      
-      alert('変換に失敗しました: ' + error.message);
-    } finally {
-      // 進捗表示を非表示に
+      // 進捗表示を非表示
       setTimeout(() => {
-        progressContainer.style.display = 'none';
+        document.getElementById('progress-container').style.display = 'none';
       }, 500);
       
-      // 変換ボタンを活性化
-      convertBtn.disabled = false;
-      convertBtn.style.opacity = '1';
-      
-      isConverting = false;
+      // ダウンロードボタンを無効化
+      const downloadBtn = document.getElementById('download-btn');
+      if (downloadBtn) {
+        downloadBtn.disabled = true;
+        downloadBtn.style.opacity = '0.5';
+        downloadBtn.style.cursor = 'not-allowed';
+      }
     }
   }
   
   /**
-   * 変換進捗の更新
-   * @param {Number} percent - 進捗パーセント（0-100）
+   * SVGプレビューを更新します
+   * @param {string} svgData - SVGデータ
    */
-  function updateProgress(percent) {
-    progressBar.style.width = `${percent}%`;
-    progressText.textContent = `変換中... ${Math.round(percent)}%`;
+  function updateSvgPreview(svgData) {
+    const svgPreview = document.getElementById('svg-preview');
+    
+    // SVGデータの整合性チェック
+    if (!svgData || !svgData.includes('<svg') || !svgData.includes('</svg>')) {
+      showErrorMessage('不完全なSVGデータが生成されました', '別の画像や設定で再試行してください');
+      return;
+    }
+    
+    try {
+      // プレビューを更新
+      svgPreview.innerHTML = svgData;
+      
+      // 現在のSVGデータを更新
+      currentSvgData = svgData;
+    } catch (error) {
+      console.error('SVGプレビューの更新に失敗しました:', error);
+      showErrorMessage('SVGプレビューの表示に失敗しました', null);
+    }
   }
   
   /**
@@ -634,6 +763,21 @@ document.addEventListener('DOMContentLoaded', () => {
       enableLayersCheckbox.checked = true;
     }
     
+    if (layerNamingSelect) {
+      layerNamingSelect.value = 'color';
+    }
+    
+    if (illustratorCompatCheckbox) {
+      illustratorCompatCheckbox.checked = true;
+    }
+    
+    // ダウンロードボタンを無効化してスタイルをリセット
+    if (downloadBtn) {
+      downloadBtn.disabled = true;
+      downloadBtn.style.opacity = '0.5';
+      downloadBtn.style.cursor = 'not-allowed';
+    }
+    
     updateSettings();
     
     console.log('UI リセット完了');
@@ -742,6 +886,18 @@ document.addEventListener('DOMContentLoaded', () => {
     enableLayersCheckbox.addEventListener('change', updateSettings);
   }
   
+  if (layerNamingSelect) {
+    layerNamingSelect.addEventListener('change', () => {
+      console.log('レイヤー命名方法の変更:', layerNamingSelect.value);
+    });
+  }
+  
+  if (illustratorCompatCheckbox) {
+    illustratorCompatCheckbox.addEventListener('change', () => {
+      console.log('イラストレーター互換モード:', illustratorCompatCheckbox.checked ? '有効' : '無効');
+    });
+  }
+  
   // レイヤー全体操作ボタンのイベントリスナー
   const showAllLayersBtn = document.getElementById('show-all-layers');
   if (showAllLayersBtn) {
@@ -776,4 +932,213 @@ document.addEventListener('DOMContentLoaded', () => {
   // 初期設定値の表示
   updateSettings();
   console.log('アプリケーション初期化完了');
-}); 
+});
+
+// 変換ボタンのイベントリスナーを設定
+document.addEventListener('DOMContentLoaded', () => {
+  const convertBtn = document.getElementById('convert-btn');
+  if (convertBtn) {
+    // 既存のイベントリスナーを削除してから追加（重複防止）
+    convertBtn.removeEventListener('click', convertToSVG);
+    convertBtn.addEventListener('click', convertToSVG);
+  }
+});
+
+/**
+ * SVGへの変換を実行します
+ */
+function convertToSVG() {
+  const currentFile = document.querySelector('#original-image').src ? 
+    {name: document.querySelector('#original-image').alt || 'image.png'} : null;
+  
+  if (!currentFile) {
+    alert('変換する画像ファイルを選択してください。');
+    return;
+  }
+  
+  // 進捗表示を表示
+  document.getElementById('progress-container').style.display = 'block';
+  updateProgressUI('変換準備中', 0);
+  
+  // 変換オプションを取得
+  const options = {
+    colorMode: document.getElementById('color-mode').value,
+    threshold: parseInt(document.getElementById('threshold-range').value, 10),
+    simplify: parseFloat(document.getElementById('simplify-range').value),
+    colorQuantization: parseInt(document.getElementById('color-quantization-range').value, 10),
+    blurRadius: parseFloat(document.getElementById('blur-radius-range').value),
+    strokeWidth: parseFloat(document.getElementById('stroke-width-range').value),
+    enableLayers: document.getElementById('enable-layers').checked,
+    layerNaming: document.getElementById('layer-naming').value,
+    illustratorCompat: document.getElementById('illustrator-compat').checked,
+    maxImageSize: 2000
+  };
+  
+  // コンソールにファイル情報と変換設定を出力
+  console.log('変換ファイル:', currentFile);
+  console.log('変換設定:', options);
+  
+  // FileオブジェクトをBlobから取得
+  const getFileFromImage = function(imgElement) {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = imgElement.naturalWidth;
+      canvas.height = imgElement.naturalHeight;
+      
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(imgElement, 0, 0);
+      
+      canvas.toBlob(function(blob) {
+        const file = new File([blob], imgElement.alt || 'image.png', {
+          type: blob.type
+        });
+        resolve(file);
+      }, 'image/png', 0.95);
+    });
+  };
+  
+  const imgElement = document.getElementById('original-image');
+  
+  if (!imgElement || !imgElement.complete || !imgElement.src) {
+    showErrorMessage('画像が正しく読み込まれていません', '別の画像を選択してください');
+    return;
+  }
+  
+  getFileFromImage(imgElement)
+    .then(file => {
+      // 安全なSVG変換を実行
+      return safeSvgConversion(file, options);
+    })
+    .then(svgData => {
+      // SVGプレビューとコードを更新
+      const svgPreview = document.getElementById('svg-preview');
+      if (svgPreview) {
+        svgPreview.innerHTML = svgData;
+      }
+      
+      const svgCode = document.getElementById('svg-code');
+      if (svgCode) {
+        // SVGコードの表示（大きすぎる場合は一部だけ表示）
+        if (svgData.length > 100000) {
+          // 長すぎるSVGデータの場合は一部だけ表示
+          const start = svgData.substring(0, 500);
+          const end = svgData.substring(svgData.length - 500);
+          svgCode.textContent = `${start}\n...(省略されました)...\n${end}`;
+        } else {
+          svgCode.textContent = svgData;
+        }
+      }
+      
+      // レイヤー情報を取得して表示
+      if (options.enableLayers) {
+        const layersList = document.getElementById('layers-list');
+        const layersContainer = document.getElementById('layers-container');
+        
+        try {
+          // レイヤー情報を抽出
+          const layers = ImageTracer.extractLayers(svgData);
+          
+          // レイヤーリストを更新
+          if (layers && layers.length > 0 && layersContainer && layersList) {
+            // レイヤーごとにリスト項目を作成
+            layersList.innerHTML = '';
+            
+            layers.forEach(layer => {
+              const layerItem = document.createElement('div');
+              layerItem.className = 'layer-item';
+              layerItem.dataset.layerId = layer.id;
+              
+              // 表示/非表示チェックボックス
+              const visibilityCheckbox = document.createElement('input');
+              visibilityCheckbox.type = 'checkbox';
+              visibilityCheckbox.className = 'layer-visibility';
+              visibilityCheckbox.checked = layer.visible;
+              visibilityCheckbox.title = '表示/非表示';
+              
+              // レイヤー名
+              const layerName = document.createElement('span');
+              layerName.className = 'layer-name';
+              layerName.textContent = layer.name;
+              
+              // 色選択
+              const colorPicker = document.createElement('input');
+              colorPicker.type = 'color';
+              colorPicker.className = 'layer-color-picker';
+              colorPicker.value = layer.color;
+              colorPicker.title = '色の変更';
+              
+              // 要素を追加
+              layerItem.appendChild(visibilityCheckbox);
+              layerItem.appendChild(layerName);
+              layerItem.appendChild(colorPicker);
+              
+              layersList.appendChild(layerItem);
+            });
+            
+            layersContainer.style.display = 'block';
+          } else if (layersContainer) {
+            layersContainer.style.display = 'none';
+          }
+        } catch (layerError) {
+          console.error('レイヤー情報の抽出に失敗しました:', layerError);
+          if (layersContainer) {
+            layersContainer.style.display = 'none';
+          }
+        }
+      } else {
+        const layersContainer = document.getElementById('layers-container');
+        if (layersContainer) {
+          layersContainer.style.display = 'none';
+        }
+      }
+      
+      // 進捗表示を非表示
+      setTimeout(() => {
+        const progressContainer = document.getElementById('progress-container');
+        if (progressContainer) {
+          progressContainer.style.display = 'none';
+        }
+      }, 500);
+      
+      // ダウンロードボタンを有効化
+      const downloadBtn = document.getElementById('download-btn');
+      if (downloadBtn) {
+        downloadBtn.disabled = false;
+        downloadBtn.style.opacity = '1.0';
+        downloadBtn.style.cursor = 'pointer';
+      }
+      
+      // 変換成功メッセージ
+      console.log('SVG変換が完了しました');
+      
+      return svgData;
+    })
+    .catch(error => {
+      console.error('SVG変換エラー:', error);
+      
+      // エラーメッセージを表示
+      showErrorMessage(
+        error.message || 'SVGへの変換中にエラーが発生しました。', 
+        '別の画像や設定で再試行してください'
+      );
+      
+      // 進捗表示を非表示
+      setTimeout(() => {
+        const progressContainer = document.getElementById('progress-container');
+        if (progressContainer) {
+          progressContainer.style.display = 'none';
+        }
+      }, 500);
+      
+      // ダウンロードボタンを無効化
+      const downloadBtn = document.getElementById('download-btn');
+      if (downloadBtn) {
+        downloadBtn.disabled = true;
+        downloadBtn.style.opacity = '0.5';
+        downloadBtn.style.cursor = 'not-allowed';
+      }
+    });
+}
+
+// resetUI関数をグローバルに公開
+window.resetUI = resetUI; 
