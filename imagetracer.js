@@ -7,13 +7,18 @@
  * このライブラリは画像のエッジを検出し、ベクターパスを生成します。
  * クライアントサイドで完全に動作し、サーバーに画像データを送信しません。
  * 
+ * 特徴：
+ * - レイヤー分割機能（色ごとの独立レイヤー）
+ * - 個別レイヤーの色編集機能
+ * - 高品質ベクター変換
+ * 
  * サポートされている画像形式：
  * - JPEG/JPG
  * - PNG
  * - GIF
  * - WebP
  * 
- * @version 2.0.0
+ * @version 3.0.0
  */
 
 const ImageTracer = {
@@ -22,7 +27,7 @@ const ImageTracer = {
    * @param {HTMLImageElement} imageObj - 変換対象の画像要素
    * @param {Object} options - 変換オプション
    * @param {Function} progressCallback - 進捗を通知するコールバック関数
-   * @returns {Promise<String>} SVG文字列を解決するPromise
+   * @returns {Promise<Object>} SVG文字列とレイヤー情報を含むオブジェクトを解決するPromise
    */
   imageToSVG: async function(imageObj, options = {}, progressCallback = null) {
     return new Promise((resolve, reject) => {
@@ -32,11 +37,14 @@ const ImageTracer = {
         colorMode: 'color', // 'color' または 'bw'（白黒）
         simplify: 0.5, // パスの単純化（0〜1）
         scale: 1,
-        outputFormat: 'svg', // 'svg' または 'path'（パスデータのみ）
+        outputFormat: 'svg', // 'svg' または 'path'（パスデータのみ）、'layered'（レイヤー情報付き）
         maxImageSize: 2000, // 処理する最大サイズ（幅または高さ）
         colorQuantization: 16, // カラーモードで使用する最大色数（2-256）
         blurRadius: 0, // 前処理のブラー強度（0-5）
-        strokeWidth: 0 // SVGパスのストローク幅（0=塗りつぶし）
+        strokeWidth: 0, // SVGパスのストローク幅（0=塗りつぶし）
+        enableLayers: true, // レイヤー機能の有効化
+        layerNaming: 'color', // レイヤー名の付け方（'color'=色、'index'=インデックス）
+        colorPalette: null // 指定されたカラーパレット（nullの場合は自動生成）
       };
       
       const opts = { ...defaultOptions, ...options };
@@ -88,7 +96,16 @@ const ImageTracer = {
           // 白黒モードの場合はPotraceを使用
           this._processBWImage(imageData, opts, updateProgress)
             .then(svgData => {
-              resolve(svgData);
+              resolve({
+                svg: svgData,
+                layers: [{
+                  id: 'layer_bw',
+                  name: '白黒レイヤー',
+                  color: '#000000',
+                  visible: true,
+                  paths: svgData.match(/<path[^>]*>/g) || []
+                }]
+              });
             })
             .catch(error => {
               reject(error);
@@ -96,8 +113,8 @@ const ImageTracer = {
         } else {
           // カラーモードの場合はカラー画像処理
           this._processColorImage(imageData, opts, updateProgress)
-            .then(svgData => {
-              resolve(svgData);
+            .then(result => {
+              resolve(result);
             })
             .catch(error => {
               reject(error);
@@ -210,16 +227,29 @@ const ImageTracer = {
           updateProgress(90);
           
           // SVGデータの取得
-          const svgData = potrace.getSVG(1.0, options.simplify);
+          let svgData = potrace.getSVG(1.0, options.simplify);
+          
+          // レイヤー機能が有効な場合、グループ化する
+          if (options.enableLayers) {
+            // SVGの開始タグと終了タグを分離
+            const svgStart = svgData.substring(0, svgData.indexOf('>') + 1);
+            const svgEnd = '</svg>';
+            const svgContent = svgData.substring(svgData.indexOf('>') + 1, svgData.lastIndexOf('</svg>'));
+            
+            // グループタグでパスを囲む
+            const layerId = 'layer_bw';
+            const layerContent = `<g id="${layerId}" data-name="白黒レイヤー" data-color="#000000" data-editable="true">${svgContent}</g>`;
+            
+            svgData = svgStart + layerContent + svgEnd;
+          }
           
           // ストローク幅が指定されている場合はスタイルを追加
-          let finalSvgData = svgData;
           if (options.strokeWidth > 0) {
-            finalSvgData = this._addStrokeToSVG(svgData, options.strokeWidth);
+            svgData = this._addStrokeToSVG(svgData, options.strokeWidth);
           }
           
           updateProgress(100);
-          resolve(finalSvgData);
+          resolve(svgData);
         });
       } catch (error) {
         console.error('Potrace処理エラー:', error);
@@ -306,7 +336,7 @@ const ImageTracer = {
    * @param {ImageData} imageData - 画像データ
    * @param {Object} options - 変換オプション
    * @param {Function} updateProgress - 進捗更新関数
-   * @returns {Promise<String>} SVG文字列
+   * @returns {Promise<Object>} SVGデータとレイヤー情報
    * @private
    */
   _processColorImage: function(imageData, options, updateProgress) {
@@ -319,24 +349,160 @@ const ImageTracer = {
           console.warn('Potraceライブラリが利用できません。代替処理を使用します。');
           // 代替処理として単純な画像埋め込みを使用
           return this._createSimpleColorSVG(imageData, options, updateProgress)
-            .then(svgData => resolve(svgData));
+            .then(svgData => resolve({
+              svg: svgData,
+              layers: [{
+                id: 'layer_image',
+                name: '画像レイヤー',
+                type: 'image',
+                visible: true
+              }]
+            }));
         }
         
         // 色の量子化とレイヤー分解
-        this._processWithColorQuantization(imageData, options, updateProgress)
-          .then(svgData => {
-            updateProgress(100);
-            resolve(svgData);
-          })
-          .catch(error => {
-            console.error('カラー処理エラー:', error);
-            // エラーが発生した場合は代替処理に切り替え
-            this._createSimpleColorSVG(imageData, options, updateProgress)
-              .then(svgData => resolve(svgData));
-          });
+        if (options.enableLayers) {
+          // レイヤー対応の処理方法
+          this._processWithLayers(imageData, options, updateProgress)
+            .then(result => {
+              updateProgress(100);
+              resolve(result);
+            })
+            .catch(error => {
+              console.error('レイヤー処理エラー:', error);
+              // エラー時は代替処理
+              this._createSimpleColorSVG(imageData, options, updateProgress)
+                .then(svgData => resolve({
+                  svg: svgData,
+                  layers: [{
+                    id: 'layer_image',
+                    name: '画像レイヤー',
+                    type: 'image',
+                    visible: true
+                  }]
+                }));
+            });
+        } else {
+          // 従来の処理方法
+          this._processWithColorQuantization(imageData, options, updateProgress)
+            .then(svgData => {
+              updateProgress(100);
+              resolve({
+                svg: svgData,
+                layers: [{
+                  id: 'layer_color',
+                  name: 'カラーレイヤー',
+                  type: 'color',
+                  visible: true
+                }]
+              });
+            })
+            .catch(error => {
+              console.error('カラー処理エラー:', error);
+              // エラーが発生した場合は代替処理に切り替え
+              this._createSimpleColorSVG(imageData, options, updateProgress)
+                .then(svgData => resolve({
+                  svg: svgData,
+                  layers: [{
+                    id: 'layer_image',
+                    name: '画像レイヤー',
+                    type: 'image',
+                    visible: true
+                  }]
+                }));
+            });
+        }
         
       } catch (error) {
         console.error('カラー変換エラー:', error);
+        reject(error);
+      }
+    });
+  },
+  
+  /**
+   * レイヤー対応の色画像処理
+   * @param {ImageData} imageData - 画像データ
+   * @param {Object} options - 変換オプション
+   * @param {Function} updateProgress - 進捗更新関数
+   * @returns {Promise<Object>} SVG文字列とレイヤー情報
+   * @private
+   */
+  _processWithLayers: function(imageData, options, updateProgress) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        // 色の量子化（最大色数を制限）
+        updateProgress(30);
+        const { palette, indexedPixels } = this._quantizeColors(imageData, options.colorQuantization);
+        
+        updateProgress(40);
+        
+        // SVG生成用の準備
+        const width = imageData.width;
+        const height = imageData.height;
+        
+        // SVGのヘッダーを作成
+        let svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" data-layered="true">\n`;
+        
+        // レイヤー情報を格納する配列
+        const layers = [];
+        
+        // パレットの各色に対してレイヤーを作成
+        const totalColors = palette.length;
+        for (let colorIndex = 0; colorIndex < totalColors; colorIndex++) {
+          updateProgress(40 + (50 * colorIndex / totalColors));
+          
+          // 現在の色のマスクを作成
+          const colorMask = this._createColorMask(indexedPixels, colorIndex, width, height);
+          
+          // Potraceで処理
+          potrace.setParameters({ threshold: 128 });
+          potrace.loadImageFromInstance(colorMask, width, height);
+          
+          await new Promise(resolve => {
+            potrace.process(() => {
+              resolve();
+            });
+          });
+          
+          // 色のRGBを16進数表現に変換
+          const color = palette[colorIndex];
+          const hexColor = this._rgbToHex(color[0], color[1], color[2]);
+          
+          // レイヤーIDとレイヤー名の生成
+          const layerId = `layer_${colorIndex}`;
+          const layerName = options.layerNaming === 'color' ? 
+                         `${hexColor}レイヤー` : 
+                         `レイヤー${colorIndex + 1}`;
+          
+          // SVGパスデータを取得
+          const pathData = potrace.getPathTag(options.simplify, { fill: hexColor, "fill-opacity": 1.0 });
+          
+          // パスにレイヤー情報を付与して追加
+          const layerContent = `<g id="${layerId}" data-name="${layerName}" data-color="${hexColor}" data-editable="true">${pathData}</g>\n`;
+          svgData += layerContent;
+          
+          // レイヤー情報を保存
+          layers.push({
+            id: layerId,
+            name: layerName,
+            color: hexColor,
+            visible: true,
+            index: colorIndex
+          });
+        }
+        
+        // SVGを閉じる
+        svgData += "</svg>";
+        
+        updateProgress(95);
+        resolve({
+          svg: svgData,
+          layers: layers
+        });
+        
+      } catch (error) {
+        console.error('レイヤー処理エラー:', error);
         reject(error);
       }
     });
@@ -693,6 +859,112 @@ const ImageTracer = {
         reject(error);
       }
     });
+  },
+  
+  /**
+   * レイヤーの色を変更する
+   * @param {String} svgString - SVG文字列
+   * @param {String} layerId - 変更対象レイヤーのID
+   * @param {String} newColor - 新しい色（16進数表記）
+   * @returns {String} 更新されたSVG文字列
+   */
+  updateLayerColor: function(svgString, layerId, newColor) {
+    try {
+      // SVG文字列をDOMに変換
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(svgString, 'image/svg+xml');
+      
+      // レイヤーの検索
+      const layerElement = svgDoc.getElementById(layerId);
+      if (!layerElement) {
+        throw new Error(`レイヤーID "${layerId}" が見つかりません`);
+      }
+      
+      // レイヤーのdata-color属性を更新
+      layerElement.setAttribute('data-color', newColor);
+      
+      // レイヤー内のパス要素を検索して色を更新
+      const paths = layerElement.querySelectorAll('path');
+      paths.forEach(path => {
+        path.setAttribute('fill', newColor);
+      });
+      
+      // 更新したSVGを文字列に戻す
+      const serializer = new XMLSerializer();
+      return serializer.serializeToString(svgDoc);
+    } catch (error) {
+      console.error('レイヤー色変更エラー:', error);
+      return svgString; // エラー時は元のSVGを返す
+    }
+  },
+  
+  /**
+   * レイヤーの可視性を変更する
+   * @param {String} svgString - SVG文字列
+   * @param {String} layerId - 変更対象レイヤーのID
+   * @param {Boolean} visible - 可視状態
+   * @returns {String} 更新されたSVG文字列
+   */
+  setLayerVisibility: function(svgString, layerId, visible) {
+    try {
+      // SVG文字列をDOMに変換
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(svgString, 'image/svg+xml');
+      
+      // レイヤーの検索
+      const layerElement = svgDoc.getElementById(layerId);
+      if (!layerElement) {
+        throw new Error(`レイヤーID "${layerId}" が見つかりません`);
+      }
+      
+      // 可視性を設定
+      if (visible) {
+        layerElement.removeAttribute('display');
+        layerElement.setAttribute('data-visible', 'true');
+      } else {
+        layerElement.setAttribute('display', 'none');
+        layerElement.setAttribute('data-visible', 'false');
+      }
+      
+      // 更新したSVGを文字列に戻す
+      const serializer = new XMLSerializer();
+      return serializer.serializeToString(svgDoc);
+    } catch (error) {
+      console.error('レイヤー可視性変更エラー:', error);
+      return svgString; // エラー時は元のSVGを返す
+    }
+  },
+  
+  /**
+   * SVGからレイヤー情報を抽出する
+   * @param {String} svgString - SVG文字列
+   * @returns {Array<Object>} レイヤー情報の配列
+   */
+  extractLayers: function(svgString) {
+    try {
+      // SVG文字列をDOMに変換
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(svgString, 'image/svg+xml');
+      
+      // レイヤー要素（g要素）を検索
+      const layerElements = svgDoc.querySelectorAll('g[data-editable="true"]');
+      
+      // レイヤー情報を抽出
+      const layers = Array.from(layerElements).map((layer, index) => {
+        return {
+          id: layer.id || `layer_${index}`,
+          name: layer.getAttribute('data-name') || `レイヤー${index + 1}`,
+          color: layer.getAttribute('data-color') || '#000000',
+          visible: layer.getAttribute('display') !== 'none',
+          index: index
+        };
+      });
+      
+      return layers;
+    } catch (error) {
+      console.error('レイヤー抽出エラー:', error);
+      return []; // エラー時は空配列を返す
+    }
   }
 };
 

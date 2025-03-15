@@ -2,17 +2,17 @@
  * 画像SVG変換ツール - メインアプリケーションスクリプト
  * 
  * このスクリプトは画像をSVG形式に変換するWebアプリケーションのメイン機能を実装しています。
+ * 
  * 主な機能：
  * - JPG、PNG、GIF、WebP画像ファイルのドラッグ＆ドロップおよびファイル選択によるアップロード
  * - 画像のSVG形式への変換処理（Potraceライブラリを使用）
  * - 変換進捗の表示
  * - 元画像とSVG変換結果のプレビュー表示
+ * - レイヤーごとの編集（色変更、表示/非表示）
  * - 変換されたSVGファイルのダウンロード
  * - 変換パラメータのカスタマイズ
  * 
- * 制限事項：
- * - 現在の実装では完全なベクター変換ではなく、画像をSVG内に埋め込む簡易的な方法を使用
- * - 大きなサイズの画像を処理する場合はブラウザのパフォーマンスに影響する可能性あり
+ * @version 3.0.0
  */
 
 // DOMが読み込まれた後に実行
@@ -34,6 +34,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const resetBtn = document.getElementById('reset-btn');
   const svgCode = document.getElementById('svg-code');
   
+  // レイヤーコンテナ要素を取得
+  const layersContainer = document.getElementById('layers-container');
+  const layersList = document.getElementById('layers-list');
+  
   // 設定要素の取得
   const thresholdRange = document.getElementById('threshold-range');
   const thresholdValue = document.getElementById('threshold-value');
@@ -41,17 +45,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const simplifyRange = document.getElementById('simplify-range');
   const simplifyValue = document.getElementById('simplify-value');
   
-  // 新しい設定要素を取得
+  // 追加設定要素の取得
   const colorQuantizationRange = document.getElementById('color-quantization-range');
   const colorQuantizationValue = document.getElementById('color-quantization-value');
   const blurRadiusRange = document.getElementById('blur-radius-range');
   const blurRadiusValue = document.getElementById('blur-radius-value');
   const strokeWidthRange = document.getElementById('stroke-width-range');
   const strokeWidthValue = document.getElementById('stroke-width-value');
+  const enableLayersCheckbox = document.getElementById('enable-layers');
   
   // 現在のファイルとSVGデータの保存用変数
   let currentFile = null;
   let currentSvgData = null;
+  let currentLayers = []; // レイヤー情報を保持
   let isConverting = false;
   // Windows環境でのファイル選択ダイアログの特殊な挙動に対応するため、状態管理を改善
   let fileInputClicked = false;
@@ -142,6 +148,15 @@ document.addEventListener('DOMContentLoaded', () => {
     svgPreview.innerHTML = '';
     svgCode.textContent = '';
     
+    // レイヤーリストを初期化
+    if (layersList) {
+      layersList.innerHTML = '';
+    }
+    // レイヤーコンテナを非表示にリセット
+    if (layersContainer) {
+      layersContainer.style.display = 'none';
+    }
+    
     previewContainer.style.display = 'flex';
     
     // 読み込み中の表示をプレビューエリアに追加
@@ -201,7 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const isBW = colorMode.value === 'bw';
     document.querySelector('.threshold-container').style.display = isBW ? 'block' : 'none';
     
-    // 新しい設定の更新
+    // 追加設定の更新
     if (colorQuantizationRange && colorQuantizationValue) {
       colorQuantizationValue.textContent = colorQuantizationRange.value;
       // カラーモードの場合のみ色量子化設定を表示
@@ -218,6 +233,157 @@ document.addEventListener('DOMContentLoaded', () => {
       // 白黒モードの場合のみストローク幅設定を表示
       document.querySelector('.stroke-width-container').style.display = 
         colorMode.value === 'bw' ? 'block' : 'none';
+    }
+    
+    // レイヤー設定の表示/非表示
+    if (enableLayersCheckbox) {
+      // レイヤー有効/無効の切り替え時に関連する設定を表示/非表示
+      document.querySelector('.layer-options-container').style.display = 
+        enableLayersCheckbox.checked ? 'block' : 'none';
+    }
+  }
+  
+  /**
+   * レイヤーリストを更新する
+   * @param {Array} layers - レイヤー情報の配列
+   */
+  function updateLayersList(layers) {
+    // レイヤーコンテナがなければ処理しない
+    if (!layersContainer || !layersList) return;
+    
+    // レイヤーが存在する場合はレイヤーコンテナを表示
+    if (layers && layers.length > 0) {
+      layersContainer.style.display = 'block';
+      
+      // レイヤーリストをクリア
+      layersList.innerHTML = '';
+      
+      // レイヤー情報を保存
+      currentLayers = layers;
+      
+      // レイヤーごとにリスト項目を作成
+      layers.forEach(layer => {
+        const layerItem = document.createElement('div');
+        layerItem.className = 'layer-item';
+        layerItem.dataset.layerId = layer.id;
+        
+        // 表示/非表示チェックボックス
+        const visibilityCheckbox = document.createElement('input');
+        visibilityCheckbox.type = 'checkbox';
+        visibilityCheckbox.className = 'layer-visibility';
+        visibilityCheckbox.checked = layer.visible;
+        visibilityCheckbox.title = '表示/非表示';
+        visibilityCheckbox.addEventListener('change', () => {
+          toggleLayerVisibility(layer.id, visibilityCheckbox.checked);
+        });
+        
+        // レイヤー名
+        const layerName = document.createElement('span');
+        layerName.className = 'layer-name';
+        layerName.textContent = layer.name;
+        
+        // 色選択
+        const colorPicker = document.createElement('input');
+        colorPicker.type = 'color';
+        colorPicker.className = 'layer-color-picker';
+        colorPicker.value = layer.color;
+        colorPicker.title = '色の変更';
+        colorPicker.addEventListener('change', () => {
+          changeLayerColor(layer.id, colorPicker.value);
+        });
+        
+        // 要素を追加
+        layerItem.appendChild(visibilityCheckbox);
+        layerItem.appendChild(layerName);
+        layerItem.appendChild(colorPicker);
+        
+        layersList.appendChild(layerItem);
+      });
+    } else {
+      // レイヤーがない場合はコンテナを非表示
+      layersContainer.style.display = 'none';
+    }
+  }
+  
+  /**
+   * レイヤーの表示/非表示を切り替える
+   * @param {String} layerId - レイヤーID
+   * @param {Boolean} visible - 表示状態
+   */
+  function toggleLayerVisibility(layerId, visible) {
+    if (!currentSvgData) return;
+    
+    try {
+      // レイヤーの可視性を変更
+      const updatedSvg = ImageTracer.setLayerVisibility(currentSvgData, layerId, visible);
+      
+      // SVG表示を更新
+      svgPreview.innerHTML = updatedSvg;
+      currentSvgData = updatedSvg;
+      
+      // SVGコードの表示を更新
+      updateSvgCodeDisplay(updatedSvg);
+      
+      // レイヤー情報の更新
+      const layerIndex = currentLayers.findIndex(layer => layer.id === layerId);
+      if (layerIndex !== -1) {
+        currentLayers[layerIndex].visible = visible;
+      }
+      
+      console.log(`レイヤー "${layerId}" の表示状態を ${visible ? '表示' : '非表示'} に変更しました`);
+    } catch (error) {
+      console.error('レイヤー可視性変更エラー:', error);
+      alert('レイヤーの表示状態の変更に失敗しました');
+    }
+  }
+  
+  /**
+   * レイヤーの色を変更する
+   * @param {String} layerId - レイヤーID
+   * @param {String} newColor - 新しい色（16進数表記）
+   */
+  function changeLayerColor(layerId, newColor) {
+    if (!currentSvgData) return;
+    
+    try {
+      // レイヤーの色を変更
+      const updatedSvg = ImageTracer.updateLayerColor(currentSvgData, layerId, newColor);
+      
+      // SVG表示を更新
+      svgPreview.innerHTML = updatedSvg;
+      currentSvgData = updatedSvg;
+      
+      // SVGコードの表示を更新
+      updateSvgCodeDisplay(updatedSvg);
+      
+      // レイヤー情報の更新
+      const layerIndex = currentLayers.findIndex(layer => layer.id === layerId);
+      if (layerIndex !== -1) {
+        currentLayers[layerIndex].color = newColor;
+      }
+      
+      console.log(`レイヤー "${layerId}" の色を ${newColor} に変更しました`);
+    } catch (error) {
+      console.error('レイヤー色変更エラー:', error);
+      alert('レイヤーの色変更に失敗しました');
+    }
+  }
+  
+  /**
+   * SVGコード表示領域を更新する
+   * @param {String} svgData - 更新するSVGデータ
+   */
+  function updateSvgCodeDisplay(svgData) {
+    if (!svgData) return;
+    
+    // SVGコードの表示（大きすぎる場合は一部だけ表示）
+    if (svgData.length > 100000) {
+      // 長すぎるSVGデータの場合は一部だけ表示
+      const start = svgData.substring(0, 500);
+      const end = svgData.substring(svgData.length - 500);
+      svgCode.textContent = `${start}\n...(省略されました)...\n${end}`;
+    } else {
+      svgCode.textContent = svgData;
     }
   }
   
@@ -236,11 +402,10 @@ document.addEventListener('DOMContentLoaded', () => {
       colorMode: colorMode.value,
       simplify: parseFloat(simplifyRange.value),
       scale: 1,
-      // 大きな画像のリサイズ上限を設定
       maxImageSize: 2000 // 2000px以上の画像はリサイズ
     };
     
-    // 新しいオプションの追加
+    // 追加オプションの設定
     if (colorQuantizationRange) {
       options.colorQuantization = parseInt(colorQuantizationRange.value);
     }
@@ -251,6 +416,11 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (strokeWidthRange && colorMode.value === 'bw') {
       options.strokeWidth = parseFloat(strokeWidthRange.value);
+    }
+    
+    // レイヤー機能の有効/無効
+    if (enableLayersCheckbox) {
+      options.enableLayers = enableLayersCheckbox.checked;
     }
     
     // ダウンロードボタンを無効化
@@ -267,13 +437,37 @@ document.addEventListener('DOMContentLoaded', () => {
     
     try {
       // 変換処理の開始
-      currentSvgData = await ImageTracer.fileToSVG(
+      const result = await ImageTracer.fileToSVG(
         currentFile,
         options,
         updateProgress
       );
       
       console.log('SVG変換完了:', currentFile.name);
+      
+      // レイヤー対応の結果形式かどうかをチェック
+      if (result && typeof result === 'object' && result.svg) {
+        // レイヤー対応のデータ形式
+        currentSvgData = result.svg;
+        
+        // レイヤーリストを更新
+        if (result.layers) {
+          updateLayersList(result.layers);
+        }
+      } else {
+        // 従来の文字列形式のSVGデータ
+        currentSvgData = result;
+        
+        // SVGからレイヤー情報を抽出（可能な場合）
+        try {
+          const extractedLayers = ImageTracer.extractLayers(currentSvgData);
+          if (extractedLayers.length > 0) {
+            updateLayersList(extractedLayers);
+          }
+        } catch (e) {
+          console.warn('レイヤー情報の抽出に失敗しました:', e);
+        }
+      }
       
       // SVG文字列の整合性チェック
       if (!currentSvgData || !currentSvgData.startsWith('<svg') || !currentSvgData.endsWith('</svg>')) {
@@ -283,15 +477,8 @@ document.addEventListener('DOMContentLoaded', () => {
       // SVGプレビューの表示
       svgPreview.innerHTML = currentSvgData;
       
-      // SVGコードの表示（大きすぎる場合は一部だけ表示）
-      if (currentSvgData.length > 100000) {
-        // 長すぎるSVGデータの場合は一部だけ表示
-        const start = currentSvgData.substring(0, 500);
-        const end = currentSvgData.substring(currentSvgData.length - 500);
-        svgCode.textContent = `${start}\n...(省略されました)...\n${end}`;
-      } else {
-        svgCode.textContent = currentSvgData;
-      }
+      // SVGコードの表示を更新
+      updateSvgCodeDisplay(currentSvgData);
       
       // ダウンロードボタンを有効化
       downloadBtn.disabled = false;
@@ -400,6 +587,15 @@ document.addEventListener('DOMContentLoaded', () => {
     svgPreview.innerHTML = '';
     svgCode.textContent = '';
     
+    // レイヤーリストをクリア
+    if (layersList) {
+      layersList.innerHTML = '';
+    }
+    // レイヤーコンテナを非表示
+    if (layersContainer) {
+      layersContainer.style.display = 'none';
+    }
+    
     previewContainer.style.display = 'none';
     settingsContainer.style.display = 'none';
     progressContainer.style.display = 'none';
@@ -408,6 +604,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 現在のファイルとSVGデータをクリア
     currentFile = null;
     currentSvgData = null;
+    currentLayers = [];
     
     // ファイル入力をリセット
     fileInput.value = '';
@@ -420,7 +617,7 @@ document.addEventListener('DOMContentLoaded', () => {
     colorMode.value = 'color';
     simplifyRange.value = 0.5;
     
-    // 新しい設定を初期値に戻す
+    // 追加設定を初期値に戻す
     if (colorQuantizationRange) {
       colorQuantizationRange.value = 16;
     }
@@ -431,6 +628,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (strokeWidthRange) {
       strokeWidthRange.value = 0;
+    }
+    
+    if (enableLayersCheckbox) {
+      enableLayersCheckbox.checked = true;
     }
     
     updateSettings();
@@ -483,12 +684,48 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   
+  /**
+   * すべてのレイヤーを表示する
+   */
+  function showAllLayers() {
+    if (!currentLayers || !currentLayers.length) return;
+    
+    currentLayers.forEach(layer => {
+      // レイヤーの可視性をtrueに設定
+      toggleLayerVisibility(layer.id, true);
+      
+      // チェックボックスの状態も更新
+      const checkbox = document.querySelector(`.layer-item[data-layer-id="${layer.id}"] .layer-visibility`);
+      if (checkbox) {
+        checkbox.checked = true;
+      }
+    });
+  }
+  
+  /**
+   * すべてのレイヤーを非表示にする
+   */
+  function hideAllLayers() {
+    if (!currentLayers || !currentLayers.length) return;
+    
+    currentLayers.forEach(layer => {
+      // レイヤーの可視性をfalseに設定
+      toggleLayerVisibility(layer.id, false);
+      
+      // チェックボックスの状態も更新
+      const checkbox = document.querySelector(`.layer-item[data-layer-id="${layer.id}"] .layer-visibility`);
+      if (checkbox) {
+        checkbox.checked = false;
+      }
+    });
+  }
+  
   // 設定値の変更イベントリスナー
   thresholdRange.addEventListener('input', updateSettings);
   simplifyRange.addEventListener('input', updateSettings);
   colorMode.addEventListener('change', updateSettings);
   
-  // 新しい設定変更イベント
+  // 追加設定の変更イベントリスナー
   if (colorQuantizationRange) {
     colorQuantizationRange.addEventListener('input', updateSettings);
   }
@@ -499,6 +736,21 @@ document.addEventListener('DOMContentLoaded', () => {
   
   if (strokeWidthRange) {
     strokeWidthRange.addEventListener('input', updateSettings);
+  }
+  
+  if (enableLayersCheckbox) {
+    enableLayersCheckbox.addEventListener('change', updateSettings);
+  }
+  
+  // レイヤー全体操作ボタンのイベントリスナー
+  const showAllLayersBtn = document.getElementById('show-all-layers');
+  if (showAllLayersBtn) {
+    showAllLayersBtn.addEventListener('click', showAllLayers);
+  }
+  
+  const hideAllLayersBtn = document.getElementById('hide-all-layers');
+  if (hideAllLayersBtn) {
+    hideAllLayersBtn.addEventListener('click', hideAllLayers);
   }
   
   // イベントリスナーの設定
