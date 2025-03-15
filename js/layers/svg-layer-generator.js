@@ -15,12 +15,12 @@ const SVGLayerGenerator = (function() {
    * @type {Object}
    */
   const DEFAULT_COLOR_OPTIONS = {
-    maxColors: 36,        // 最大色数
+    maxColors: 16,        // 最大色数（元の36から16に減らして最適化）
     colorSpace: 'rgb',    // 色空間（rgb, lab, hsv）
     colorDistance: 'euclidean', // 色距離計算方法
     colorReduction: 'kmeans',   // 色削減アルゴリズム
     colorImportance: [3, 6, 1], // RGB各要素の重要度
-    minColorArea: 50      // 最小の色領域サイズ（ピクセル）
+    minColorArea: 0.8      // 最小の色領域サイズ（ピクセル比率）
   };
 
   /**
@@ -87,7 +87,8 @@ const SVGLayerGenerator = (function() {
    * @returns {Array} 抽出された代表色の配列
    */
   function quantizeColors(pixels, options) {
-    const maxColors = options.maxColors || 64; // デフォルト値を増加
+    // 最大色数を制限（オプションで指定された値と16のいずれか小さい方を使用）
+    const maxColors = Math.min(options.maxColors || 16, 16);
     const result = [];
     const colorCounts = {};
     const totalPixels = pixels.length / 4;
@@ -103,8 +104,8 @@ const SVGLayerGenerator = (function() {
       const g = pixels[i+1] * (options.colorImportance ? options.colorImportance[1] : 1);
       const b = pixels[i+2] * (options.colorImportance ? options.colorImportance[2] : 1);
       
-      // より細かい量子化（色の分解能を上げる）
-      const qFactor = options.detailBoost ? 4 : 8; // detail boostがある場合は分解能を上げる
+      // より粗い量子化（色の分解能を下げてグループ化を促進）
+      const qFactor = options.detailBoost ? 8 : 16; // 量子化ファクターを大きくして色をまとめる
       const qr = Math.floor(r / qFactor) * qFactor;
       const qg = Math.floor(g / qFactor) * qFactor;
       const qb = Math.floor(b / qFactor) * qFactor;
@@ -143,9 +144,9 @@ const SVGLayerGenerator = (function() {
       }
     });
     
-    // 最小エリアサイズ（面積比率）
-    const minAreaRatio = (options.minColorArea || 0.5) / 100;
-    const minPixelCount = Math.max(10, Math.floor(totalPixels * minAreaRatio));
+    // 最小エリアサイズ（面積比率）- 小さな領域は無視するよう調整
+    const minAreaRatio = (options.minColorArea || 0.8) / 100;
+    const minPixelCount = Math.max(50, Math.floor(totalPixels * minAreaRatio));
     
     console.log(`最小ピクセル数: ${minPixelCount} (全 ${totalPixels} ピクセル中)`);
     

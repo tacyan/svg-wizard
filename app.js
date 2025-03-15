@@ -541,9 +541,146 @@ function forceSplitSvgLayers(svgData, safeMode = false) {
       colorGroups[colorKey].push(element.outerHTML);
     });
     
+    // 色の類似性を計算する関数
+    const calculateColorSimilarity = (color1, color2) => {
+      // 色文字列から16進数部分を抽出する
+      const extractHexColor = (colorStr) => {
+        const hexMatch = colorStr.match(/#[0-9a-fA-F]{3,8}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)/);
+        return hexMatch ? hexMatch[0] : null;
+      };
+      
+      // 16進数からRGB値に変換
+      const hexToRgb = (hex) => {
+        if (!hex || hex === 'none') return null;
+        
+        // #RGB形式を#RRGGBB形式に変換
+        if (hex.length === 4) {
+          hex = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+        }
+        
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? {
+          r: parseInt(result[1], 16),
+          g: parseInt(result[2], 16),
+          b: parseInt(result[3], 16)
+        } : null;
+      };
+      
+      // RGB文字列からRGB値に変換
+      const rgbStrToRgb = (rgbStr) => {
+        const match = rgbStr.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/);
+        return match ? {
+          r: parseInt(match[1], 10),
+          g: parseInt(match[2], 10),
+          b: parseInt(match[3], 10)
+        } : null;
+      };
+      
+      // カラーキーから色部分を抽出
+      const color1Parts = color1.split('_');
+      const color2Parts = color2.split('_');
+      
+      const fill1 = extractHexColor(color1Parts[0]);
+      const fill2 = extractHexColor(color2Parts[0]);
+      
+      // 塗りつぶし色がない場合は類似していないと判断
+      if (!fill1 || !fill2 || fill1 === 'none' || fill2 === 'none') {
+        return 0;
+      }
+      
+      // RGB値に変換
+      let rgb1 = fill1.startsWith('#') ? hexToRgb(fill1) : rgbStrToRgb(fill1);
+      let rgb2 = fill2.startsWith('#') ? hexToRgb(fill2) : rgbStrToRgb(fill2);
+      
+      if (!rgb1 || !rgb2) return 0;
+      
+      // RGB空間でのユークリッド距離を計算
+      const distance = Math.sqrt(
+        Math.pow(rgb1.r - rgb2.r, 2) +
+        Math.pow(rgb1.g - rgb2.g, 2) +
+        Math.pow(rgb1.b - rgb2.b, 2)
+      );
+      
+      // 最大距離は√(255²+255²+255²) ≈ 441.7
+      // 類似度を0～1の範囲に正規化（距離が小さいほど類似度は高い）
+      return Math.max(0, 1 - distance / 441.7);
+    };
+    
+    // 色グループをマージする処理
+    const mergeColorGroups = () => {
+      const colorKeys = Object.keys(colorGroups);
+      const similarityThreshold = 0.9; // 類似度がこの値以上なら同じグループとみなす
+      const MAX_LAYERS = 8; // 最大レイヤー数
+      
+      // 色グループが少ない場合はそのまま返す
+      if (colorKeys.length <= MAX_LAYERS) {
+        return colorGroups;
+      }
+      
+      console.log(`色グループが多すぎます(${colorKeys.length}個)。マージを試みます。`);
+      
+      // 新しいグループを作成
+      const mergedGroups = {};
+      const processedKeys = new Set();
+      
+      // 各色グループについて
+      for (let i = 0; i < colorKeys.length; i++) {
+        const key = colorKeys[i];
+        
+        // 既に処理済みならスキップ
+        if (processedKeys.has(key)) continue;
+        
+        // 新しいグループを作成
+        const mergedKey = key;
+        mergedGroups[mergedKey] = [...colorGroups[key]];
+        processedKeys.add(key);
+        
+        // 類似した他のグループを探して結合
+        for (let j = i + 1; j < colorKeys.length; j++) {
+          const otherKey = colorKeys[j];
+          
+          // 既に処理済みならスキップ
+          if (processedKeys.has(otherKey)) continue;
+          
+          // 類似度を計算
+          const similarity = calculateColorSimilarity(key, otherKey);
+          
+          // 類似度が閾値以上ならマージ
+          if (similarity >= similarityThreshold) {
+            mergedGroups[mergedKey].push(...colorGroups[otherKey]);
+            processedKeys.add(otherKey);
+          }
+        }
+      }
+      
+      // マージ後のグループ数が依然として多すぎる場合、出現頻度の高い上位グループだけを保持
+      const mergedKeys = Object.keys(mergedGroups);
+      if (mergedKeys.length > MAX_LAYERS) {
+        console.log(`マージ後も色グループが多すぎます(${mergedKeys.length}個)。上位${MAX_LAYERS}個を保持します。`);
+        
+        // 要素数でソートし、上位グループのみを保持
+        const sortedGroups = mergedKeys
+          .map(key => ({ key, count: mergedGroups[key].length }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, MAX_LAYERS);
+        
+        const finalGroups = {};
+        sortedGroups.forEach(group => {
+          finalGroups[group.key] = mergedGroups[group.key];
+        });
+        
+        return finalGroups;
+      }
+      
+      return mergedGroups;
+    };
+    
+    // 色グループをマージ
+    const finalColorGroups = mergeColorGroups();
+    
     // 色グループの数をログ
-    const groupCount = Object.keys(colorGroups).length;
-    console.log(`${groupCount}個の色グループを作成しました`);
+    const groupCount = Object.keys(finalColorGroups).length;
+    console.log(`${groupCount}個の色グループを最終的に作成しました`);
     
     // 新しいSVG構造を構築
     const newSvgTemplate = `
@@ -555,7 +692,7 @@ function forceSplitSvgLayers(svgData, safeMode = false) {
           </clipPath>
         </defs>
         <g id="Layers" data-photopea-root="true">
-          ${Object.entries(colorGroups).map(([color, elements], index) => {
+          ${Object.entries(finalColorGroups).map(([color, elements], index) => {
             // タイムアウトチェック
             if (timeoutTriggered) {
               throw new Error('処理タイムアウト');
@@ -1581,8 +1718,8 @@ function updateSvgPreview(svgData) {
   
   // 追加設定を初期値に戻す
   if (colorQuantization) {
-    colorQuantization.value = 16;
-    if (colorQuantizationValue) colorQuantizationValue.textContent = '16';
+    colorQuantization.value = 8;  // 16から8に変更
+    if (colorQuantizationValue) colorQuantizationValue.textContent = '8';
   }
   
   if (blurRadius) {
@@ -1595,7 +1732,7 @@ function updateSvgPreview(svgData) {
     if (strokeWidthValue) strokeWidthValue.textContent = '0';
   }
   
-  if (enableLayersCheckbox) enableLayersCheckbox.checked = true;
+  if (enableLayersCheckbox) enableLayersCheckbox.checked = false;  // trueからfalseに変更
   if (illustratorCompatCheckbox) illustratorCompatCheckbox.checked = true;
   if (photopeaCompatCheckbox) photopeaCompatCheckbox.checked = true;
   if (objectDetectionCheckbox) objectDetectionCheckbox.checked = true;
@@ -1609,7 +1746,7 @@ function updateSvgPreview(svgData) {
   console.log('UIのリセットが完了しました');
   
   // 設定表示を更新
-    updateSettings();
+  updateSettings();
 }
 
 /**
