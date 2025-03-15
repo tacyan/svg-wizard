@@ -204,7 +204,9 @@ document.addEventListener('DOMContentLoaded', () => {
       threshold: parseInt(thresholdRange.value),
       colorMode: colorMode.value,
       simplify: parseFloat(simplifyRange.value),
-      scale: 1
+      scale: 1,
+      // 大きな画像のリサイズ上限を設定
+      maxImageSize: 2000 // 2000px以上の画像はリサイズ
     };
     
     // ダウンロードボタンを無効化
@@ -229,11 +231,23 @@ document.addEventListener('DOMContentLoaded', () => {
       
       console.log('SVG変換完了:', currentFile.name);
       
+      // SVG文字列の整合性チェック
+      if (!currentSvgData || !currentSvgData.startsWith('<svg') || !currentSvgData.endsWith('</svg>')) {
+        throw new Error('SVGデータの生成に失敗しました。不完全なSVGが生成されました。');
+      }
+      
       // SVGプレビューの表示
       svgPreview.innerHTML = currentSvgData;
       
-      // SVGコードの表示
-      svgCode.textContent = currentSvgData;
+      // SVGコードの表示（大きすぎる場合は一部だけ表示）
+      if (currentSvgData.length > 100000) {
+        // 長すぎるSVGデータの場合は一部だけ表示
+        const start = currentSvgData.substring(0, 500);
+        const end = currentSvgData.substring(currentSvgData.length - 500);
+        svgCode.textContent = `${start}\n...(省略されました)...\n${end}`;
+      } else {
+        svgCode.textContent = currentSvgData;
+      }
       
       // ダウンロードボタンを有効化
       downloadBtn.disabled = false;
@@ -241,6 +255,18 @@ document.addEventListener('DOMContentLoaded', () => {
       
     } catch (error) {
       console.error('SVG変換エラー:', error);
+      
+      // エラーメッセージを表示
+      svgPreview.innerHTML = `
+        <div style="padding: 20px; background-color: #fff0f0; border: 1px solid #ffcccc; border-radius: 4px;">
+          <h3 style="color: #cc0000;">変換エラー</h3>
+          <p>${error.message || 'SVGへの変換中にエラーが発生しました。'}</p>
+          <p>別の画像や設定で再試行してください。</p>
+        </div>
+      `;
+      
+      svgCode.textContent = `/* 変換エラー: ${error.message} */`;
+      
       alert('変換に失敗しました: ' + error.message);
     } finally {
       // 進捗表示を非表示に
@@ -271,26 +297,38 @@ document.addEventListener('DOMContentLoaded', () => {
   function downloadSVG() {
     if (!currentSvgData || !currentFile) return;
     
-    // .svgの拡張子を持つファイル名を作成
-    const filename = currentFile.name.replace(/\.[^/.]+$/, '') + '.svg';
-    
-    // Blobオブジェクトの作成
-    const blob = new Blob([currentSvgData], { type: 'image/svg+xml' });
-    
-    // ダウンロードリンクの作成
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = filename;
-    
-    // リンクをクリックしてダウンロードを開始
-    document.body.appendChild(link);
-    link.click();
-    
-    // クリーンアップ
-    setTimeout(() => {
-      URL.revokeObjectURL(link.href);
-      document.body.removeChild(link);
-    }, 100);
+    try {
+      // SVG文字列の整合性を確認
+      if (!currentSvgData.startsWith('<svg') || !currentSvgData.endsWith('</svg>')) {
+        throw new Error('不完全なSVGデータです。再変換してください。');
+      }
+      
+      // .svgの拡張子を持つファイル名を作成
+      const filename = currentFile.name.replace(/\.[^/.]+$/, '') + '.svg';
+      
+      // Blobオブジェクトの作成
+      const blob = new Blob([currentSvgData], { type: 'image/svg+xml' });
+      
+      // ダウンロードリンクの作成
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      
+      // リンクをクリックしてダウンロードを開始
+      document.body.appendChild(link);
+      link.click();
+      
+      // クリーンアップ
+      setTimeout(() => {
+        URL.revokeObjectURL(link.href);
+        document.body.removeChild(link);
+      }, 100);
+      
+      console.log('SVGダウンロード完了:', filename);
+    } catch (error) {
+      console.error('ダウンロードエラー:', error);
+      alert('ダウンロードに失敗しました: ' + error.message);
+    }
   }
   
   /**

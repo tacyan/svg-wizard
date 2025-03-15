@@ -86,6 +86,10 @@
         // Potraceライブラリの読み込み状態を確認するためのフラグ
         window.potraceLoaded = false;
         
+        // Potraceライブラリの読み込み試行回数
+        let potraceLoadAttempts = 0;
+        const maxPotraceLoadAttempts = 3;
+        
         // Potraceライブラリの読み込みが成功した場合の処理
         function potraceLoadSuccess() {
             console.log('Potraceライブラリの読み込みが成功しました');
@@ -94,12 +98,36 @@
         
         // Potraceライブラリの読み込みが失敗した場合の処理
         function potraceLoadError() {
-            console.warn('Potraceライブラリの読み込みに失敗しました。代替処理が使用されます。');
+            potraceLoadAttempts++;
+            console.warn(`Potraceライブラリの読み込みに失敗しました (${potraceLoadAttempts}/${maxPotraceLoadAttempts})。`);
+            
+            if (potraceLoadAttempts < maxPotraceLoadAttempts) {
+                // 別のCDNソースから再試行
+                console.log('別のソースからPotraceライブラリを読み込み直します...');
+                setTimeout(loadPotraceLibrary, 1000);
+            } else {
+                console.warn('Potraceライブラリの読み込みを諦めました。代替処理が使用されます。');
+            }
         }
+        
+        // Potraceライブラリの読み込み関数
+        function loadPotraceLibrary() {
+            const sources = [
+                'https://cdn.jsdelivr.net/npm/potrace@2.1.8/potrace.min.js',
+                'https://unpkg.com/potrace@2.1.8/potrace.min.js',
+                'https://cdnjs.cloudflare.com/ajax/libs/potrace/2.1.8/potrace.min.js'
+            ];
+            
+            const script = document.createElement('script');
+            script.src = sources[potraceLoadAttempts % sources.length];
+            script.onload = potraceLoadSuccess;
+            script.onerror = potraceLoadError;
+            document.body.appendChild(script);
+        }
+        
+        // 初回読み込み
+        loadPotraceLibrary();
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/potrace@2.1.8/potrace.min.js" 
-            onload="potraceLoadSuccess()" 
-            onerror="potraceLoadError()"></script>
     <script src="imagetracer.js"></script>
     <script src="app.js"></script>
 </body>

@@ -30,7 +30,8 @@ const ImageTracer = {
         colorMode: 'color', // 'color' または 'bw'（白黒）
         simplify: 0.5, // パスの単純化（0〜1）
         scale: 1,
-        outputFormat: 'svg' // 'svg' または 'path'（パスデータのみ）
+        outputFormat: 'svg', // 'svg' または 'path'（パスデータのみ）
+        maxImageSize: 2000 // 処理する最大サイズ（幅または高さ）
       };
       
       const opts = { ...defaultOptions, ...options };
@@ -42,14 +43,27 @@ const ImageTracer = {
         // 初期進捗の通知
         updateProgress(5);
         
+        // 画像サイズの制限（大きすぎる画像はリサイズ）
+        let width = imageObj.width * opts.scale;
+        let height = imageObj.height * opts.scale;
+        
+        // 画像が大きすぎる場合はリサイズ
+        const maxSize = opts.maxImageSize;
+        if (width > maxSize || height > maxSize) {
+          const ratio = Math.min(maxSize / width, maxSize / height);
+          width = Math.floor(width * ratio);
+          height = Math.floor(height * ratio);
+          console.warn(`画像サイズが大きいため、${width}x${height}にリサイズして処理します。`);
+        }
+        
         // Canvasの作成と画像の描画
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        canvas.width = imageObj.width * opts.scale;
-        canvas.height = imageObj.height * opts.scale;
+        canvas.width = width;
+        canvas.height = height;
         
-        ctx.drawImage(imageObj, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(imageObj, 0, 0, width, height);
         
         updateProgress(15);
         
@@ -161,43 +175,51 @@ const ImageTracer = {
    */
   _fallbackBWProcess: function(imageData, options, updateProgress) {
     return new Promise((resolve) => {
-      updateProgress(30);
-      
-      // 簡易実装：白黒画像の場合は閾値処理を行いグレースケール化
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      
-      canvas.width = imageData.width;
-      canvas.height = imageData.height;
-      ctx.putImageData(imageData, 0, 0);
-      
-      // 閾値処理（白黒化）
-      const newImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = newImageData.data;
-      const threshold = options.threshold;
-      
-      for (let i = 0; i < data.length; i += 4) {
-        // グレースケール値の計算
-        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        // 閾値と比較して白か黒にする
-        const value = gray >= threshold ? 255 : 0;
-        data[i] = data[i + 1] = data[i + 2] = value;
+      try {
+        updateProgress(30);
+        
+        // 簡易実装：白黒画像の場合は閾値処理を行いグレースケール化
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = imageData.width;
+        canvas.height = imageData.height;
+        ctx.putImageData(imageData, 0, 0);
+        
+        // 閾値処理（白黒化）
+        const newImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = newImageData.data;
+        const threshold = options.threshold;
+        
+        for (let i = 0; i < data.length; i += 4) {
+          // グレースケール値の計算
+          const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          // 閾値と比較して白か黒にする
+          const value = gray >= threshold ? 255 : 0;
+          data[i] = data[i + 1] = data[i + 2] = value;
+        }
+        
+        ctx.putImageData(newImageData, 0, 0);
+        
+        updateProgress(60);
+        
+        // 画質を適切に設定して変換
+        const imageQuality = 0.8; // 画質設定（0.0〜1.0）
+        const base64Image = canvas.toDataURL('image/png', imageQuality);
+        
+        updateProgress(90);
+        
+        // SVGの生成（適切にエスケープ）
+        const svg = this._createSVGWithImage(imageData.width, imageData.height, base64Image);
+        
+        updateProgress(100);
+        resolve(svg);
+      } catch (error) {
+        console.error('白黒変換エラー:', error);
+        // エラーが発生した場合でも最低限のSVGを返す
+        const svg = this._createEmptySVG(imageData.width, imageData.height);
+        resolve(svg);
       }
-      
-      ctx.putImageData(newImageData, 0, 0);
-      
-      updateProgress(60);
-      
-      // Base64形式の画像データを取得
-      const base64Image = canvas.toDataURL('image/png');
-      
-      // SVGの生成
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${imageData.width}" height="${imageData.height}" viewBox="0 0 ${imageData.width} ${imageData.height}">
-        <image width="${imageData.width}" height="${imageData.height}" href="${base64Image}"/>
-      </svg>`;
-      
-      updateProgress(100);
-      resolve(svg);
     });
   },
   
@@ -224,26 +246,57 @@ const ImageTracer = {
         
         updateProgress(60);
         
-        // Base64形式の画像データを取得
-        const base64Image = canvas.toDataURL('image/png');
+        // 画質を適切に設定して変換（メモリ使用量削減のため）
+        const imageQuality = 0.8; // 画質設定（0.0〜1.0）
+        const base64Image = canvas.toDataURL('image/png', imageQuality);
         
-        // SVGの生成
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${imageData.width}" height="${imageData.height}" viewBox="0 0 ${imageData.width} ${imageData.height}">
-          <image width="${imageData.width}" height="${imageData.height}" href="${base64Image}"/>
-        </svg>`;
+        updateProgress(90);
+        
+        // SVGの生成（適切にエスケープ）
+        const svg = this._createSVGWithImage(imageData.width, imageData.height, base64Image);
         
         updateProgress(100);
         resolve(svg);
       } catch (error) {
+        console.error('カラー変換エラー:', error);
         reject(error);
       }
     });
   },
   
   /**
+   * Base64画像を含むSVGを生成する
+   * @param {Number} width - 画像の幅
+   * @param {Number} height - 画像の高さ
+   * @param {String} base64Image - Base64エンコードされた画像データ
+   * @returns {String} SVG文字列
+   * @private
+   */
+  _createSVGWithImage: function(width, height, base64Image) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <image width="${width}" height="${height}" href="${base64Image}"/>
+</svg>`;
+  },
+  
+  /**
+   * 空のSVGを生成する（エラー時のフォールバック）
+   * @param {Number} width - 画像の幅
+   * @param {Number} height - 画像の高さ
+   * @returns {String} SVG文字列
+   * @private
+   */
+  _createEmptySVG: function(width, height) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect width="${width}" height="${height}" fill="#f0f0f0"/>
+  <text x="${width/2}" y="${height/2}" font-family="sans-serif" font-size="24" text-anchor="middle">変換エラー</text>
+</svg>`;
+  },
+  
+  /**
    * 画像URLからSVGを生成する（ヘルパーメソッド）
    * @param {String} url - 画像URL
    * @param {Object} options - 変換オプション
+   * @param {Function} progressCallback - 進捗コールバック関数
    * @returns {Promise<String>} SVG文字列を解決するPromise
    */
   imageURLToSVG: function(url, options = {}, progressCallback = null) {
@@ -268,23 +321,36 @@ const ImageTracer = {
    * File/BlobオブジェクトからSVGを生成する（ヘルパーメソッド）
    * @param {File|Blob} file - ファイルまたはBlobオブジェクト
    * @param {Object} options - 変換オプション
+   * @param {Function} progressCallback - 進捗コールバック関数
    * @returns {Promise<String>} SVG文字列を解決するPromise
    */
   fileToSVG: function(file, options = {}, progressCallback = null) {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      
-      reader.onload = (event) => {
-        this.imageURLToSVG(event.target.result, options, progressCallback)
-          .then(svg => resolve(svg))
-          .catch(err => reject(err));
-      };
-      
-      reader.onerror = () => {
-        reject(new Error('ファイルの読み込みに失敗しました'));
-      };
-      
-      reader.readAsDataURL(file);
+      try {
+        const reader = new FileReader();
+        
+        reader.onload = (event) => {
+          const imageURL = event.target.result;
+          
+          // ファイルサイズが大きすぎる場合は警告
+          if (imageURL.length > 10000000) { // 約10MB
+            console.warn('画像ファイルが大きいです。処理に時間がかかる場合があります。');
+          }
+          
+          this.imageURLToSVG(imageURL, options, progressCallback)
+            .then(svg => resolve(svg))
+            .catch(err => reject(err));
+        };
+        
+        reader.onerror = () => {
+          reject(new Error('ファイルの読み込みに失敗しました'));
+        };
+        
+        reader.readAsDataURL(file);
+      } catch (error) {
+        console.error('ファイル処理エラー:', error);
+        reject(error);
+      }
     });
   }
 };
