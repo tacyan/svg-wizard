@@ -150,254 +150,445 @@ function showErrorMessage(message, action, actionHandler) {
 }
 
 /**
- * ファイルをSVGに変換します（安全なエラーハンドリング付き）
- * @param {File} file - 変換する画像ファイル
+ * 画像ファイルをSVGに安全に変換する関数
+ * エラー処理と代替手段を提供
+ * @param {File} file - 変換対象の画像ファイル
  * @param {Object} options - 変換オプション
- * @returns {Promise<string>} SVGデータを含むPromise
+ * @param {Function} progressCallback - 進捗コールバック
+ * @param {Function} resolve - 成功時の解決関数
+ * @param {Function} reject - 失敗時の拒否関数
  */
-function safeSvgConversion(file, options) {
-  return new Promise((resolve, reject) => {
+function safeSvgConversion(file, options, progressCallback, resolve, reject) {
+  // 有効な画像タイプかチェック
+  if (!file || !file.type.startsWith('image/')) {
+    console.error('無効なファイルタイプ:', file ? file.type : 'ファイルなし');
+    reject(new Error('有効な画像ファイルを選択してください'));
+    return;
+  }
+  
+  console.log('SVG変換を開始します:', file.name);
+  
+  // 現在の画像ファイルを保存
+  currentImageFile = file;
+  
+  // 進捗コールバック関数
+  const progress = function(value) {
+    console.log(`変換進捗: ${value}%`);
+    if (typeof progressCallback === 'function') {
+      progressCallback(value);
+    }
+  };
+  
+  // 変換オプションの設定
+  const conversionOptions = {
+    // 基本イメージ処理オプション
+    threshold: options.threshold || 128,
+    colorMode: options.colorMode || 'color',
+    colorQuantization: options.colorQuantization || 16,
+    blurRadius: options.blurRadius || 0,
+    
+    // レイヤーオプション
+    enableLayers: options.enableLayers !== false,
+    layerNaming: options.layerNaming || 'color',
+    preserveLayers: options.preserveLayers !== false,
+    layerCompatibility: options.layerCompatibility || 'photoshop',
+    
+    // オブジェクト検出オプション
+    edgeThreshold: options.edgeThreshold || 20,
+    minColorArea: options.minColorArea || 10,
+    detailBoost: options.detailBoost || false,
+    
+    // パフォーマンスオプション
+    maxImageSize: options.maxImageSize || 2000,
+    timeout: options.timeout || 60000, // デフォルト1分のタイムアウト
+    
+    // 進捗コールバック
+    progressCallback: progress
+  };
+  
+  // グローバル変数に保存して他の関数からアクセス可能に
+  window.conversionOptions = conversionOptions;
+  
+  // SVGLayerAdapterを使用
+  if (typeof SVGLayerAdapter !== 'undefined' && typeof SVGLayerAdapter.fileToSVG === 'function') {
+    console.log('SVGLayerAdapterを使用してSVG変換を実行');
+    
+    // 全体のタイムアウト処理
+    const timeoutId = setTimeout(() => {
+      console.error('SVG変換がタイムアウトしました（' + (conversionOptions.timeout / 1000) + '秒）');
+      if (typeof reject === 'function') {
+        reject(new Error('SVG変換処理がタイムアウトしました。処理が複雑すぎるか、サイズが大きすぎる可能性があります。'));
+      }
+    }, conversionOptions.timeout);
+    
     try {
-      console.log('safeSvgConversion: 変換開始', file.name, file.type);
-      
-      // ファイル形式チェック
-      if (!file || !file.type.startsWith('image/')) {
-        reject(new Error('無効なファイル形式です。画像ファイルを選択してください。'));
-        return;
-      }
-      
-      // 現在のファイルをグローバル変数に保存
-      window.currentImageFile = file;
-      
-      // 進捗コールバック関数
-      const progressCallback = function(stage, percent) {
-        console.log(`進捗: ${stage} (${percent}%)`);
-        updateProgressUI(stage, percent);
-      };
-      
-      // 変換オプションを設定
-      const conversionOptions = {
-        // 画像処理オプション
-        threshold: options.threshold || 128,
-        colorMode: options.colorMode || 'color',
-        colorQuantization: options.colorQuantization || 16,
-        blurRadius: options.blurRadius || 0,
-        simplify: options.simplify || 0.5,
-        scale: options.scale || 1,
-        strokeWidth: options.strokeWidth || 0,
+      SVGLayerAdapter.fileToSVG(file, conversionOptions, function(error, svgData) {
+        clearTimeout(timeoutId); // タイムアウトをクリア
         
-        // レイヤーオプション
-        enableLayers: options.enableLayers !== false,
-        layerNaming: options.layerNaming || 'color',
-        illustratorCompat: options.illustratorCompat !== false,
-        photopeaCompat: options.photopeaCompat !== false,
-        universalLayerCompat: true, // 汎用レイヤー互換モードを有効化
-        
-        // Photopea特有のオプション
-        photopeaLayerPrefix: 'layer_', // レイヤー名のプレフィックス
-        photopeaLayerNaming: 'color',  // レイヤー命名方法（'color', 'index', 'auto'）
-        
-        // 物体認識オプション
-        objectDetection: options.objectDetection !== false,
-        edgeThreshold: options.edgeThreshold || 30,
-        minSegmentSize: options.minSegmentSize || 100,
-        maxSegments: options.maxSegments || 24,
-        
-        // パフォーマンスオプション
-        maxImageSize: options.maxImageSize || 2000,
-        timeout: options.timeout || 60000,
-        progressCallback: progressCallback,
-        quality: options.quality || 0.8
-      };
-      
-      console.log('変換オプション:', conversionOptions);
-      
-      // ImageTracerが利用可能かチェック
-      if (typeof ImageTracer === 'undefined') {
-        console.error('ImageTracerが見つかりません');
-        useImageBasedFallback();
-        return;
-      }
-      
-      if (typeof ImageTracer.fileToSVG !== 'function') {
-        console.error('ImageTracer.fileToSVG 関数が見つかりません');
-        useImageBasedFallback();
-        return;
-      }
-      
-      // SVG変換を実行
-      console.log('ImageTracer.fileToSVG 呼び出し');
-      try {
-        ImageTracer.fileToSVG(file, conversionOptions, handleSvgResult);
-      } catch (error) {
-        console.error('ImageTracer.fileToSVG 実行エラー:', error);
-        useImageBasedFallback();
-      }
-      
-      // SVG変換結果の処理
-      function handleSvgResult(error, svgData) {
-        if (error) {
-          console.error('SVG変換エラー:', error);
-          
-          // エラーの詳細を確認
-          const errorMessage = error.message || '不明なエラー';
-          console.error('エラーメッセージ:', errorMessage);
-          
-          // 何らかのSVGデータが返された場合はそれを使用（フォールバック処理の結果）
-          if (svgData && typeof svgData === 'string' && svgData.includes('<svg')) {
-            console.log('フォールバックSVGを使用');
-            resolve(svgData);
-          } else {
-            // フォールバック処理
-            console.log('画像ベースのフォールバック処理を使用');
-            useImageBasedFallback();
-          }
+        if (error || !svgData) {
+          console.error('SVGLayerAdapter変換エラー:', error);
+          // ImageTracerにフォールバック
+          fallbackToImageTracer(file, conversionOptions, resolve, reject);
         } else {
-          // SVGデータの整合性チェック
-          if (!svgData || typeof svgData !== 'string' || !svgData.includes('<svg')) {
-            console.error('無効なSVGデータ:', svgData);
-            useImageBasedFallback();
-            return;
-          }
+          console.log('SVGLayerAdapter変換成功');
           
-          console.log('SVG変換完了:', svgData.substring(0, 100) + '...');
-          resolve(svgData);
+          // SVGデータの検証
+          if (typeof svgData === 'string' && svgData.includes('<svg')) {
+            try {
+              // 成功時の処理を実行
+              handleSuccessfulConversion(svgData);
+            } catch (handlerError) {
+              console.error('成功ハンドラでエラー:', handlerError);
+              resolve(svgData); // エラーでも元のSVGデータを返す
+            }
+          } else {
+            console.error('無効なSVGデータ形式', typeof svgData);
+            fallbackToImageTracer(file, conversionOptions, resolve, reject);
+          }
         }
-      }
+      });
+    } catch (adapterError) {
+      clearTimeout(timeoutId); // タイムアウトをクリア
+      console.error('SVGLayerAdapter例外:', adapterError);
+      fallbackToImageTracer(file, conversionOptions, resolve, reject);
+    }
+  } else {
+    console.log('SVGLayerAdapterが利用できないため、ImageTracerにフォールバック');
+    fallbackToImageTracer(file, conversionOptions, resolve, reject);
+  }
+  
+  // 成功時の共通処理
+  function handleSuccessfulConversion(svgData) {
+    // SVGデータの整合性チェック
+    if (!svgData || typeof svgData !== 'string' || !svgData.includes('<svg')) {
+      console.error('無効なSVGデータ:', svgData);
+      useImageBasedFallback();
+      return;
+    }
+    
+    // レイヤーが含まれているか確認
+    const layerCount = (svgData.match(/<g[^>]*id="layer_/g) || []).length;
+    console.log(`生成されたSVGには ${layerCount} 個のレイヤーが含まれています`);
+    
+    // レイヤーが少なすぎる場合は警告
+    if (layerCount <= 1 && conversionOptions.colorMode === 'color') {
+      console.warn('レイヤーが十分に生成されていません。色の量子化値を増やして再試行することを検討してください。');
       
-      // 画像ベースのフォールバック処理を実行
-      function useImageBasedFallback() {
-        console.log('画像ベースのフォールバック処理を開始');
-        progressCallback('フォールバック処理中', 20);
+      // 空のLayersグループがある場合
+      const emptyLayersGroup = svgData.includes('<g id="Layers" data-photopea-root="true"></g>') || 
+                             svgData.includes('<g id="Layers"></g>');
+      
+      if (emptyLayersGroup) {
+        console.error('レイヤーグループが空です。レイヤー生成に失敗しました。');
         
-        // 画像を読み込む
-        const img = new Image();
-        const objectURL = URL.createObjectURL(file);
-        
-        img.onload = function() {
-          // 画像をリサイズしてキャンバスに描画
-          progressCallback('画像リサイズ中', 40);
+        // 最初の試行でエラーの場合、より詳細なオプションで再試行
+        if (!conversionOptions._retried) {
+          console.log('レイヤー生成に失敗したため、詳細モードで再試行します');
+          
+          // 再試行のコピーを作成して元のオプションを変更しない
+          const retryOptions = {
+            ...conversionOptions,
+            colorQuantization: Math.min(256, conversionOptions.colorQuantization * 2),
+            minColorArea: 5, // より小さい色領域も検出
+            edgeThreshold: 10, // よりシャープなエッジ検出
+            detailBoost: true, // 詳細モードを有効化
+            forceSeparateLayers: true, // 強制的にレイヤーを分離
+            _retried: true, // 再試行フラグ
+            timeout: 15000 // 15秒のタイムアウトに制限
+          };
+          
+          // タイムアウト処理を設定 (15秒)
+          const timeoutId = setTimeout(() => {
+            console.warn('レイヤー再生成がタイムアウトしました。強制分割を試みます。');
+            try {
+              // 強制的にSVGのレイヤーを分割（セーフモード）
+              const forcedSvgData = forceSplitSvgLayers(svgData, true);
+              if (forcedSvgData) {
+                resolve(forcedSvgData);
+              } else {
+                resolve(svgData); // 失敗した場合は元のSVGを使用
+              }
+            } catch (timeoutError) {
+              console.error('タイムアウト処理中のエラー:', timeoutError);
+              resolve(svgData); // エラー時は元のSVGを使用
+            }
+          }, 15000);
           
           try {
-            const canvas = document.createElement('canvas');
-            let width = img.naturalWidth;
-            let height = img.naturalHeight;
-            const maxSize = conversionOptions.maxImageSize || 2000;
-            
-            // リサイズが必要な場合
-            if (width > maxSize || height > maxSize) {
-              if (width > height) {
-                height = Math.floor(height * (maxSize / width));
-                width = maxSize;
-              } else {
-                width = Math.floor(width * (maxSize / height));
-                height = maxSize;
+            // レイヤーアダプタまたはImageTracerのどちらかを使用
+            if (typeof SVGLayerAdapter !== 'undefined' && typeof SVGLayerAdapter.fileToSVG === 'function') {
+              console.log('SVGレイヤーアダプターを使用した再試行');
+              SVGLayerAdapter.fileToSVG(file, retryOptions, function(error, retrySvgData) {
+                clearTimeout(timeoutId); // タイムアウトをクリア
+                
+                if (error || !retrySvgData) {
+                  console.error('SVGレイヤーアダプター再試行エラー:', error);
+                  
+                  // エラー時は強制レイヤー分割を試みる（セーフモード）
+                  try {
+                    const forcedSvgData = forceSplitSvgLayers(svgData, true);
+                    if (forcedSvgData) {
+                      resolve(forcedSvgData);
+                    } else {
+                      resolve(svgData); // 失敗した場合は元のSVGを使用
+                    }
+                  } catch (e) {
+                    console.error('強制分割エラー:', e);
+                    resolve(svgData);
+                  }
+                } else {
+                  // 再試行成功、レイヤー数をチェック
+                  const retryLayerCount = (retrySvgData.match(/<g[^>]*id="layer_/g) || []).length;
+                  console.log(`再試行後のレイヤー数: ${retryLayerCount}`);
+                  
+                  if (retryLayerCount > 1) {
+                    // 再試行成功
+                    resolve(retrySvgData);
+                  } else {
+                    // 再試行してもレイヤー不足、強制分割を試みる（セーフモード）
+                    try {
+                      const forcedSvgData = forceSplitSvgLayers(retrySvgData, true);
+                      resolve(forcedSvgData || retrySvgData);
+                    } catch (e) {
+                      console.error('強制分割エラー:', e);
+                      resolve(retrySvgData);
+                    }
+                  }
+                }
+              });
+            } else if (typeof ImageTracer !== 'undefined' && typeof ImageTracer.fileToSVG === 'function') {
+              console.log('ImageTracerを使用した再試行');
+              ImageTracer.fileToSVG(file, retryOptions, function(error, retrySvgData) {
+                clearTimeout(timeoutId); // タイムアウトをクリア
+                
+                if (error || !retrySvgData) {
+                  console.error('ImageTracer再試行エラー:', error);
+                  try {
+                    const forcedSvgData = forceSplitSvgLayers(svgData, true);
+                    resolve(forcedSvgData || svgData);
+                  } catch (e) {
+                    console.error('強制分割エラー:', e);
+                    resolve(svgData);
+                  }
+                } else {
+                  resolve(retrySvgData);
+                }
+              });
+            } else {
+              // どちらも利用できない場合は強制分割（セーフモード）
+              clearTimeout(timeoutId);
+              console.log('変換ライブラリが利用できません、強制分割を試みます');
+              try {
+                const forcedSvgData = forceSplitSvgLayers(svgData, true);
+                resolve(forcedSvgData || svgData);
+              } catch (e) {
+                console.error('強制分割エラー:', e);
+                resolve(svgData);
               }
             }
-            
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, width, height);
-            
-            // Base64画像をSVGに埋め込む
-            progressCallback('SVG生成中', 70);
-            
-            try {
-              // カラーモードによって処理を分ける
-              let svgData;
-              
-              if (conversionOptions.colorMode === 'bw') {
-                // 白黒モード
-                svgData = createBWFallbackSVG(canvas, conversionOptions.threshold);
-              } else {
-                // カラーモード - 単純に画像を埋め込む
-                const dataURL = canvas.toDataURL('image/png', conversionOptions.quality);
-                svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-                  <title>画像から変換 - フォールバック処理</title>
-                  <image width="${width}" height="${height}" href="${dataURL}" />
-                </svg>`;
-              }
-              
-              // URLをクリーンアップ
-              URL.revokeObjectURL(objectURL);
-              
-              progressCallback('完了', 100);
-              resolve(svgData);
-            } catch (svgError) {
-              console.error('SVG生成エラー:', svgError);
-              createErrorSVG(width, height, svgError.message);
-            }
-          } catch (canvasError) {
-            console.error('キャンバス処理エラー:', canvasError);
-            createErrorSVG(400, 300, canvasError.message);
+          } catch (retryError) {
+            clearTimeout(timeoutId);
+            console.error('再試行処理中のエラー:', retryError);
+            resolve(svgData); // エラー時は元のSVGを使用
           }
-        };
-        
-        img.onerror = function() {
-          console.error('画像読み込みエラー:', file.name);
-          URL.revokeObjectURL(objectURL);
-          createErrorSVG(400, 300, '画像の読み込みに失敗しました');
-        };
-        
-        img.src = objectURL;
-      }
-      
-      // 白黒モードのフォールバックSVG生成
-      function createBWFallbackSVG(canvas, threshold) {
-        const ctx = canvas.getContext('2d');
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imgData.data;
-        
-        // 2値化処理
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
           
-          // グレースケール変換
-          const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
-          
-          // 閾値で2値化
-          const value = brightness >= threshold ? 255 : 0;
-          data[i] = data[i + 1] = data[i + 2] = value;
+          return; // 処理終了、結果はコールバック内で返される
         }
         
-        ctx.putImageData(imgData, 0, 0);
-        
-        // Base64画像をSVGに埋め込む
-        const dataURL = canvas.toDataURL('image/png', 1.0);
-        return `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="0 0 ${canvas.width} ${canvas.height}">
-          <title>白黒モード - フォールバック処理</title>
-          <image width="${canvas.width}" height="${canvas.height}" href="${dataURL}" />
-        </svg>`;
-      }
-      
-      // エラーSVGの生成
-      function createErrorSVG(width, height, message) {
-        const svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-          <rect width="100%" height="100%" fill="#f8f9fa" />
-          <text x="50%" y="50%" font-family="sans-serif" font-size="14" text-anchor="middle" fill="#dc3545">エラー: ${message || '変換に失敗しました'}</text>
-        </svg>`;
-        
-        resolve(svgData);
-      }
-    } catch (error) {
-      console.error('予期せぬエラー:', error);
-      
-      try {
-        // 最終手段のエラーSVG
-        const svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
-          <rect width="100%" height="100%" fill="#f8f9fa" />
-          <text x="50%" y="50%" font-family="sans-serif" font-size="14" text-anchor="middle" fill="#dc3545">致命的なエラー: ${error.message || '変換処理に失敗しました'}</text>
-        </svg>`;
-        
-        resolve(svgData);
-      } catch (finalError) {
-        reject(error);
+        // 既に再試行済みか、最初の試行でない場合、強制分割を試みる（セーフモード）
+        console.log('強制的にレイヤー分割を実行します');
+        try {
+          const forcedSvgData = forceSplitSvgLayers(svgData, true);
+          if (forcedSvgData && forcedSvgData !== svgData) {
+            // 分割後のレイヤー数をチェック
+            const newLayerCount = (forcedSvgData.match(/<g[^>]*id="layer_/g) || []).length;
+            console.log(`強制分割後のレイヤー数: ${newLayerCount}`);
+            
+            if (newLayerCount > 0) {
+              console.log('強制レイヤー分割が成功しました');
+              resolve(forcedSvgData);
+              return;
+            }
+          }
+        } catch (splitError) {
+          console.error('強制レイヤー分割エラー:', splitError);
+          // エラー時も続行し、元のSVGを使用
+        }
       }
     }
-  });
+    
+    // 問題なければそのまま元のSVGを返す
+    console.log('SVG変換完了:', svgData.substring(0, 100) + '...');
+    resolve(svgData);
+  }
+}
+
+/**
+ * SVGを色ごとに強制的にレイヤー分割する関数
+ * SVGのパスやポリゴンを色ごとにグループ化して新しいレイヤー構造を作成
+ * @param {string} svgData - 分割するSVGデータ
+ * @param {boolean} safeMode - パフォーマンス向上とクラッシュ防止のためのセーフモード
+ * @returns {string} レイヤー分割されたSVGデータ
+ */
+function forceSplitSvgLayers(svgData, safeMode = false) {
+  console.log('SVGの強制レイヤー分割を開始します');
+  
+  // 処理タイムアウト設定（5秒）
+  let timeoutTriggered = false;
+  const operationTimeout = setTimeout(() => {
+    timeoutTriggered = true;
+    console.warn('SVG強制分割処理がタイムアウトしました');
+  }, 5000);
+  
+  try {
+    // SVGパース
+    const parser = new DOMParser();
+    const svgDoc = parser.parseFromString(svgData, 'image/svg+xml');
+    
+    // パースエラーチェック
+    const parserError = svgDoc.querySelector('parsererror');
+    if (parserError) {
+      console.error('SVGパースエラー:', parserError.textContent);
+      clearTimeout(operationTimeout);
+      return null;
+    }
+    
+    // ルートSVG要素
+    const svgElement = svgDoc.querySelector('svg');
+    if (!svgElement) {
+      console.error('SVG要素が見つかりません');
+      clearTimeout(operationTimeout);
+      return null;
+    }
+    
+    // SVG属性取得
+    const viewBox = svgElement.getAttribute('viewBox');
+    const width = svgElement.getAttribute('width');
+    const height = svgElement.getAttribute('height');
+    
+    // パスとポリゴン要素を収集
+    const paths = Array.from(svgDoc.querySelectorAll('path'));
+    const polygons = Array.from(svgDoc.querySelectorAll('polygon'));
+    const elements = [...paths, ...polygons];
+    
+    console.log(`${paths.length}個のパスと${polygons.length}個のポリゴンが見つかりました`);
+    
+    // 要素が少なすぎる場合はそのまま返す
+    if (elements.length === 0) {
+      console.warn('分割対象の要素が見つかりません');
+      clearTimeout(operationTimeout);
+      return null;
+    }
+    
+    // 安全チェック：要素数が多すぎる場合はサンプリング
+    const MAX_ELEMENTS = safeMode ? 1000 : 5000;
+    let processedElements = elements;
+    
+    if (elements.length > MAX_ELEMENTS) {
+      console.warn(`要素が多すぎます(${elements.length}個)。サンプリングします。`);
+      // 要素の一部だけを使用（均等にサンプリング）
+      const samplingRate = MAX_ELEMENTS / elements.length;
+      processedElements = elements.filter((_, index) => {
+        return Math.random() < samplingRate;
+      });
+      console.log(`${processedElements.length}個の要素にサンプリングしました`);
+    }
+    
+    // 色ごとにグループ化
+    const colorGroups = {};
+    
+    // 色の抽出関数
+    const getElementColor = (element) => {
+      // タイムアウトチェック
+      if (timeoutTriggered) {
+        throw new Error('処理タイムアウト');
+      }
+      
+      const fill = element.getAttribute('fill') || 'none';
+      const stroke = element.getAttribute('stroke') || 'none';
+      
+      // style属性からの色抽出
+      let fillFromStyle = 'none';
+      let strokeFromStyle = 'none';
+      
+      const style = element.getAttribute('style');
+      if (style) {
+        const fillMatch = style.match(/fill:\s*([^;]+)/);
+        if (fillMatch) fillFromStyle = fillMatch[1];
+        
+        const strokeMatch = style.match(/stroke:\s*([^;]+)/);
+        if (strokeMatch) strokeFromStyle = strokeMatch[1];
+      }
+      
+      // 最終的な色を決定
+      const finalFill = (fill !== 'none') ? fill : fillFromStyle;
+      const finalStroke = (stroke !== 'none') ? stroke : strokeFromStyle;
+      
+      return `${finalFill}_${finalStroke}`;
+    };
+    
+    // 要素を色ごとにグループ化
+    processedElements.forEach((element, index) => {
+      // 大量処理時の定期チェック
+      if (index % 100 === 0 && timeoutTriggered) {
+        throw new Error('処理タイムアウト');
+      }
+      
+      const colorKey = getElementColor(element);
+      if (!colorGroups[colorKey]) {
+        colorGroups[colorKey] = [];
+      }
+      colorGroups[colorKey].push(element.outerHTML);
+    });
+    
+    // 色グループの数をログ
+    const groupCount = Object.keys(colorGroups).length;
+    console.log(`${groupCount}個の色グループを作成しました`);
+    
+    // 新しいSVG構造を構築
+    const newSvgTemplate = `
+      <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+           viewBox="${viewBox || '0 0 800 600'}" width="${width || '800'}" height="${height || '600'}">
+        <defs>
+          <clipPath id="svgFrame">
+            <rect x="0" y="0" width="100%" height="100%" />
+          </clipPath>
+        </defs>
+        <g id="Layers" data-photopea-root="true">
+          ${Object.entries(colorGroups).map(([color, elements], index) => {
+            // タイムアウトチェック
+            if (timeoutTriggered) {
+              throw new Error('処理タイムアウト');
+            }
+            
+            const colorName = color.replace(/[^a-zA-Z0-9]/g, '_');
+            return `
+              <g id="layer_${index}_${colorName.substring(0, 15)}" clip-path="url(#svgFrame)">
+                ${elements.join('\n')}
+              </g>
+            `;
+          }).join('\n')}
+        </g>
+      </svg>
+    `;
+    
+    // 処理完了
+    console.log('強制レイヤー分割が完了しました');
+    clearTimeout(operationTimeout);
+    return newSvgTemplate;
+    
+  } catch (error) {
+    console.error('強制レイヤー分割中にエラーが発生しました:', error);
+    clearTimeout(operationTimeout);
+    
+    // タイムアウトエラーの場合は null を返す
+    if (timeoutTriggered || error.message === '処理タイムアウト') {
+      return null;
+    }
+    
+    // その他のエラーでは元のSVGをそのまま返す
+    return svgData;
+  }
 }
 
 // グローバル変数の初期化
@@ -565,7 +756,7 @@ document.addEventListener('DOMContentLoaded', function() {
     event.preventDefault();
     event.stopPropagation();
     if (uploadArea) {
-      uploadArea.classList.add('drag-over');
+    uploadArea.classList.add('drag-over');
     }
   }
   
@@ -577,7 +768,7 @@ document.addEventListener('DOMContentLoaded', function() {
     event.preventDefault();
     event.stopPropagation();
     if (uploadArea) {
-      uploadArea.classList.remove('drag-over');
+    uploadArea.classList.remove('drag-over');
     }
   }
   
@@ -589,7 +780,7 @@ document.addEventListener('DOMContentLoaded', function() {
     event.preventDefault();
     event.stopPropagation();
     if (uploadArea) {
-      uploadArea.classList.remove('drag-over');
+    uploadArea.classList.remove('drag-over');
     }
     
     if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
@@ -729,11 +920,11 @@ document.addEventListener('DOMContentLoaded', function() {
   updateSettings();
   console.log('アプリケーション初期化完了');
 });
-
-/**
- * 変換設定パラメータの更新
- */
-function updateSettings() {
+  
+  /**
+   * 変換設定パラメータの更新
+   */
+  function updateSettings() {
   thresholdValue.textContent = threshold.value;
   simplifyValue.textContent = simplify.value;
   
@@ -896,7 +1087,7 @@ function changeLayerColor(layerId, newColor) {
     }
     
     console.log(`レイヤー "${layerId}" の色を ${newColor} に変更しました`);
-  } catch (error) {
+    } catch (error) {
     console.error('レイヤー色変更エラー:', error);
     alert('レイヤーの色変更に失敗しました');
   }
@@ -930,160 +1121,114 @@ function updateSvgCodeDisplay(svgData) {
 }
 
 /**
- * SVGへの変換を実行します
+ * SVGへの変換処理を実行する関数
+ * @param {File} file - 変換対象のファイルオブジェクト
+ * @param {Object} options - 変換オプション
+ * @param {Function} progressCallback - 進捗通知用コールバック関数
+ * @returns {Promise<string>} SVGデータを含むPromiseオブジェクト
  */
-async function convertToSVG() {
-  console.log('変換開始');
-  
-  try {
-    // 現在の画像ファイルを取得
-    const currentImageFile = window.currentImageFile || currentFile;
-    if (!currentImageFile) {
-      showErrorMessage('変換する画像ファイルが選択されていません', '画像を選択');
+function processSVGConversion(file, options, progressCallback) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error('ファイルが指定されていません'));
       return;
     }
-    
-    // ファイル情報のログ出力（デバッグ用）
-    console.log('ファイル情報:', {
-      name: currentImageFile.name,
-      type: currentImageFile.type,
-      size: currentImageFile.size,
-      lastModified: new Date(currentImageFile.lastModified).toISOString()
-    });
-    
-    // 進捗表示を初期化
-    updateProgressUI('変換準備中', 0);
-    const progressContainer = document.getElementById('progress-container');
-    if (progressContainer) {
-      progressContainer.style.display = 'block';
-    }
-    
-    // 設定値を取得
-    const colorModeEl = document.getElementById('color-mode');
-    const thresholdEl = document.getElementById('threshold');
-    const colorQuantizationEl = document.getElementById('color-quantization');
-    const blurRadiusEl = document.getElementById('blur-radius');
-    const simplifyEl = document.getElementById('simplify');
-    const strokeWidthEl = document.getElementById('stroke-width');
-    const enableLayersCheckboxEl = document.getElementById('enable-layers');
-    const illustratorCompatCheckboxEl = document.getElementById('illustrator-compat');
-    const photopeaCompatCheckboxEl = document.getElementById('photopea-compat');
-    const objectDetectionCheckboxEl = document.getElementById('object-detection');
-    
-    // 変換オプションを設定
-    const options = {
-      // 画像処理オプション
-      colorMode: colorModeEl ? colorModeEl.value : 'color',
-      threshold: thresholdEl ? parseInt(thresholdEl.value) : 128,
-      colorQuantization: colorQuantizationEl ? parseInt(colorQuantizationEl.value) : 16,
-      blurRadius: blurRadiusEl ? parseInt(blurRadiusEl.value) : 0,
-      simplify: simplifyEl ? parseFloat(simplifyEl.value) : 0.5,
-      strokeWidth: strokeWidthEl ? parseFloat(strokeWidthEl.value) : 0,
-      
-      // レイヤーオプション
-      enableLayers: enableLayersCheckboxEl ? enableLayersCheckboxEl.checked : true,
-      layerNaming: 'color',
-      illustratorCompat: illustratorCompatCheckboxEl ? illustratorCompatCheckboxEl.checked : true,
-      photopeaCompat: photopeaCompatCheckboxEl ? photopeaCompatCheckboxEl.checked : true,
-      universalLayerCompat: true, // 汎用レイヤー互換モードを常に有効化
-      
-      // Photopea特有のオプション
-      photopeaLayerPrefix: 'layer_',
-      photopeaLayerNaming: 'color',
-      ensurePhotopeaCompat: true, // Photopeaとの互換性を確保する強制フラグ
-      
-      // 物体認識オプション
-      objectDetection: objectDetectionCheckboxEl ? objectDetectionCheckboxEl.checked : true,
-      
-      // パフォーマンスオプション
-      maxImageSize: 2000
-    };
-    
-    // Photopea互換モードの設定を確認（デバッグ用）
-    if (photopeaCompatCheckboxEl && photopeaCompatCheckboxEl.checked) {
-      console.log('Photopea互換モードが有効化されています');
-    } else {
-      console.log('警告: Photopea互換モードが無効になっています。強制的に有効化します。');
-      options.photopeaCompat = true;
-    }
+
+    console.log('SVG変換プロセスを開始します:', file.name);
     
     try {
-      // タイムアウト処理の設定（60秒）
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('変換処理がタイムアウトしました。画像サイズを小さくするか、別の画像をお試しください。')), 60000);
-      });
+      // 既存のsafeSvgConversion関数を呼び出す
+      safeSvgConversion(file, options, progressCallback, resolve, reject);
+    } catch (error) {
+      console.error('SVG変換プロセス中にエラーが発生しました:', error);
+      reject(error);
+    }
+  });
+}
+
+/**
+ * SVGに変換ボタンのクリックハンドラー
+ * ユーザーが選択したファイルをSVG形式に変換する
+ */
+function convertToSVG() {
+  console.log('SVG変換を開始します');
+  
+  // ファイルが選択されているか確認
+  if (!currentFile) {
+    showErrorMessage('ファイルを選択してください', 'ファイルを選択', () => {
+      document.getElementById('file-input').click();
+    });
+    return;
+  }
+  
+  // ファイル情報をデバッグ出力
+  console.log('変換対象ファイル:', currentFile.name, currentFile.type, currentFile.size);
+  
+  // 進捗表示の準備
+  const progressContainer = document.getElementById('progress-container');
+  if (progressContainer) {
+    progressContainer.style.display = 'block';
+  }
+  updateProgressUI('SVGに変換中...', 0);
+  
+  // 変換設定を取得
+  const colorMode = document.getElementById('color-mode').value;
+  const threshold = parseInt(document.getElementById('threshold').value);
+  const posterizeColors = parseInt(document.getElementById('color-quantization').value);
+  const blurRadius = parseInt(document.getElementById('blur-radius').value);
+  const edgeThreshold = 20; // デフォルト値を使用
+  const enableLayers = document.getElementById('enable-layers').checked;
+  const layerNaming = 'color'; // デフォルト値を使用
+  const maxImageSize = 2000; // デフォルト値を使用
+  const detailBoost = document.getElementById('object-detection').checked;
+  
+  // 変換オプションを設定
+  const conversionOptions = {
+    // 色モード設定
+    colorMode: colorMode,
+    threshold: threshold,
+    colorQuantization: posterizeColors,
+    blurRadius: blurRadius,
+    edgeThreshold: edgeThreshold,
+    detailBoost: detailBoost,
+    
+    // レイヤー関連設定
+    enableLayers: enableLayers,
+    layerNaming: layerNaming,
+    enforceSingleLayer: !enableLayers,
+    preserveLayers: enableLayers,
+    layerCompatibility: 'photoshop',
+    
+    // オブジェクト検出と性能設定
+    maxImageSize: maxImageSize,
+    timeout: 120000, // 2分のタイムアウト
+    
+    // 進捗コールバック
+    progressCallback: function(stage, progress) {
+      // 進捗バーを更新
+      updateProgressUI(stage, progress);
+      console.log(`変換進捗: ${progress}%`);
+    }
+  };
+  
+  // SVG変換処理を実行
+  processSVGConversion(currentFile, conversionOptions, updateProgressUI)
+    .then(svgData => {
+      // 成功時の処理
+      console.log('SVG変換が成功しました');
       
-      // SVGに変換（タイムアウト処理付き）
-      const svgDataPromise = safeSvgConversion(currentImageFile, options);
-      
-      // race: 最初に完了した方のPromiseの結果を採用
-      const svgData = await Promise.race([svgDataPromise, timeoutPromise]);
-      
-      // SVGデータがない場合はエラー
-      if (!svgData) {
-        throw new Error('SVGデータが生成されませんでした');
+      // 進捗表示を非表示
+      if (progressContainer) {
+        progressContainer.style.display = 'none';
       }
       
-      console.log('SVG変換成功: データサイズ', svgData.length, '文字');
+      // SVGを表示
+      updateSvgPreview(svgData);
       
-      // SVGデータを保存
-      window.currentSvgData = svgData;
-      currentSvgData = svgData;
+      // SVGコードを表示エリアに設定
+      updateSvgCodeDisplay(svgData);
       
-      // SVGプレビューを更新
-      try {
-        updateSvgPreview(svgData);
-        console.log('SVGプレビュー更新完了');
-      } catch (previewError) {
-        console.error('SVGプレビュー更新エラー:', previewError);
-        showErrorMessage('SVGプレビューの表示に失敗しました: ' + previewError.message, '再試行');
-      }
-      
-      // SVGコード表示を更新
-      try {
-        updateSvgCodeDisplay(svgData);
-        console.log('SVGコード表示更新完了');
-      } catch (codeError) {
-        console.error('SVGコード表示更新エラー:', codeError);
-        // SVGコード表示の失敗はクリティカルではないので、エラーメッセージは表示せず続行
-      }
-      
-      // レイヤー情報の抽出
-      try {
-        // ImageTracerとextractLayers関数が利用可能かチェック
-        if (options.enableLayers && typeof ImageTracer !== 'undefined' && typeof ImageTracer.extractLayers === 'function') {
-          console.log('レイヤー情報抽出開始');
-          const layers = ImageTracer.extractLayers(svgData);
-          
-          // 有効なレイヤーがある場合のみ更新
-          if (layers && layers.length > 0) {
-            console.log('レイヤー検出:', layers.length, '個');
-            currentLayers = layers;
-            updateLayersList(layers);
-          } else {
-            console.log('レイヤーが検出されませんでした');
-            // レイヤー情報がない場合はレイヤーコンテナを非表示
-            const layersContainer = document.getElementById('layers-container');
-            if (layersContainer) {
-              layersContainer.style.display = 'none';
-            }
-          }
-        } else {
-          console.log('レイヤー抽出機能が利用できません');
-        }
-      } catch (layerError) {
-        console.error('レイヤー情報の抽出に失敗しました:', layerError);
-        // レイヤー抽出に失敗しても処理は継続
-        const layersContainer = document.getElementById('layers-container');
-        if (layersContainer) {
-          layersContainer.style.display = 'none';
-        }
-      }
-      
-      // 進捗表示を完了状態に
-      updateProgressUI('変換完了', 100);
-      
-      // 結果表示エリアを表示
+      // 結果コンテナを表示
       const resultContainer = document.getElementById('result-container');
       if (resultContainer) {
         resultContainer.style.display = 'block';
@@ -1094,34 +1239,33 @@ async function convertToSVG() {
       if (downloadButton) {
         downloadButton.disabled = false;
       }
-    } catch (conversionError) {
-      console.error('SVG変換実行エラー:', conversionError);
       
-      // 特定のエラーメッセージに対する対応
-      if (conversionError.message.includes('ImageTracerCore') || 
-          conversionError.message.includes('getImageDataFromCanvas')) {
-        showErrorMessage(
-          'SVG変換に失敗しました: ' + conversionError.message,
-          'ページを再読み込み',
-          function() { window.location.reload(); }
-        );
-      } else {
-        showErrorMessage(
-          'SVG変換に失敗しました: ' + conversionError.message,
-          '再試行'
-        );
+      // 現在のSVGデータを保存
+      currentSvgData = svgData;
+      
+      // レイヤー情報を抽出して表示
+      try {
+        if (window.ImageTracer && typeof window.ImageTracer.extractLayers === 'function') {
+          const layers = window.ImageTracer.extractLayers(svgData);
+          updateLayersList(layers);
+        }
+      } catch (error) {
+        console.error('レイヤー情報の抽出に失敗しました:', error);
+      }
+    })
+    .catch(error => {
+      // エラー時の処理
+      console.error('SVG変換エラー:', error);
+      
+      // 進捗表示を非表示
+      if (progressContainer) {
+        progressContainer.style.display = 'none';
       }
       
-      // 進捗表示をエラー状態に
-      updateProgressUI('変換失敗', 0);
-    }
-  } catch (error) {
-    console.error('予期せぬエラー:', error);
-    showErrorMessage('予期せぬエラーが発生しました: ' + error.message, '再試行');
-    
-    // 進捗表示をエラー状態に
-    updateProgressUI('エラー', 0);
-  }
+      showErrorMessage('SVGへの変換中にエラーが発生しました: ' + error.message, 'リトライ', () => {
+        convertToSVG();
+      });
+    });
 }
 
 /**
@@ -1160,14 +1304,34 @@ function updateSvgPreview(svgData) {
       const width = svgElement.getAttribute('width') || svgElement.viewBox?.baseVal?.width || 100;
       const height = svgElement.getAttribute('height') || svgElement.viewBox?.baseVal?.height || 100;
       
+      console.log(`SVGの元の寸法: ${width}x${height}`);
+      
       // viewBoxが設定されていない場合は設定
       if (!svgElement.getAttribute('viewBox')) {
+        console.log('viewBoxが設定されていないため設定します');
         svgElement.setAttribute('viewBox', `0 0 ${width} ${height}`);
       }
       
+      // viewBoxを確認し、不正な場合は修正
+      const viewBox = svgElement.getAttribute('viewBox');
+      if (!viewBox || viewBox.split(' ').length < 4) {
+        console.log('viewBoxの形式が不正なため修正します');
+        svgElement.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      }
+      
+      // 必ず幅と高さの属性があることを確認
+      if (!svgElement.hasAttribute('width')) {
+        svgElement.setAttribute('width', width);
+      }
+      
+      if (!svgElement.hasAttribute('height')) {
+        svgElement.setAttribute('height', height);
+      }
+      
       // アスペクト比を維持しながらプレビュー領域に収まるように調整
-      svgElement.style.width = '100%';
+      svgElement.style.width = 'auto';
       svgElement.style.height = 'auto';
+      svgElement.style.maxWidth = '100%';
       svgElement.style.maxHeight = '280px';
       svgElement.style.display = 'block';
       svgElement.style.margin = '0 auto';
@@ -1176,7 +1340,50 @@ function updateSvgPreview(svgData) {
       // プリザベアスペクトレシオを設定
       svgElement.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       
-      console.log(`SVGサイズ: ${width}x${height}, viewBox: ${svgElement.getAttribute('viewBox')}`);
+      // SVG内の変換グループがあれば調整
+      const mainGroup = svgElement.querySelector('g[id="Layers"], g[data-photopea-root="true"], g[id="document"]');
+      if (mainGroup) {
+        console.log('メインレイヤーグループを検出しました');
+        mainGroup.setAttribute('transform-origin', 'center');
+      }
+      
+      // SVG内のすべてのパスに対して、ビューボックス外への突き抜けを防止
+      const allPaths = svgElement.querySelectorAll('path');
+      if (allPaths.length > 0) {
+        // クリッピングパスがまだなければ追加
+        if (!svgElement.querySelector('clipPath#svg-boundary')) {
+          const defs = svgElement.querySelector('defs');
+          if (!defs) {
+            const newDefs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+            svgElement.prepend(newDefs);
+          }
+          
+          const defsElement = svgElement.querySelector('defs');
+          const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+          clipPath.setAttribute('id', 'svg-boundary');
+          
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', '0');
+          rect.setAttribute('y', '0');
+          rect.setAttribute('width', width);
+          rect.setAttribute('height', height);
+          
+          clipPath.appendChild(rect);
+          defsElement.appendChild(clipPath);
+        }
+        
+        // すべてのパスにクリッピングパスを適用
+        allPaths.forEach(path => {
+          path.setAttribute('clip-path', 'url(#svg-boundary)');
+        });
+      }
+      
+      // SVG全体にオーバーフロー制限を追加
+      svgElement.style.overflow = 'hidden';
+      
+      console.log(`SVG表示設定: サイズ=${width}x${height}, viewBox=${svgElement.getAttribute('viewBox')}, aspectRatio=${svgElement.getAttribute('preserveAspectRatio')}`);
+    } else {
+      console.warn('SVG要素が見つかりませんでした');
     }
     
     // 現在のSVGデータを更新
@@ -1185,18 +1392,34 @@ function updateSvgPreview(svgData) {
     console.error('SVGプレビューの更新に失敗しました:', error);
     showErrorMessage('SVGプレビューの表示に失敗しました', null);
   }
-}
-
-/**
- * SVGデータをダウンロードする
- */
-function downloadSVG() {
-  if (!currentSvgData || !currentFile) return;
+  }
+  
+  /**
+   * SVGデータをダウンロードする
+   */
+  function downloadSVG() {
+  if (!currentSvgData || !currentFile) {
+    showErrorMessage('ダウンロードできるSVGデータがありません。画像を選択して変換してください。', 'やり直す');
+    return;
+  }
   
   try {
-    // SVG文字列の整合性を確認
-    if (!currentSvgData.startsWith('<svg') || !currentSvgData.endsWith('</svg>')) {
+    // SVG文字列の厳格な検証
+    if (!currentSvgData.trim().startsWith('<?xml') && !currentSvgData.trim().startsWith('<svg')) {
       throw new Error('不完全なSVGデータです。再変換してください。');
+    }
+    
+    // 必須SVG要素が含まれているか確認
+    if (!currentSvgData.includes('<svg') || !currentSvgData.includes('</svg>')) {
+      throw new Error('SVGの基本構造が不正です。再変換してください。');
+    }
+    
+    // レイヤー情報を確認
+    const layerCount = (currentSvgData.match(/<g[^>]*id="layer_/g) || []).length;
+    console.log(`ダウンロードするSVGには ${layerCount} 個のレイヤーが含まれています`);
+    
+    if (layerCount === 0) {
+      console.warn('レイヤーが検出されませんでした。レイヤー分割に問題がある可能性があります。');
     }
     
     // .svgの拡張子を持つファイル名を作成
@@ -1204,6 +1427,15 @@ function downloadSVG() {
     
     // Blobオブジェクトの作成
     const blob = new Blob([currentSvgData], { type: 'image/svg+xml' });
+    
+    // SVGデータサイズの確認
+    const svgSizeInKB = Math.round(blob.size / 1024);
+    console.log(`SVGデータサイズ: ${svgSizeInKB} KB`);
+    
+    // ファイルサイズの警告（オプション）
+    if (svgSizeInKB > 5000) {
+      console.warn(`SVGファイルサイズが大きいです (${svgSizeInKB} KB)。複雑すぎる可能性があります。`);
+    }
     
     // ダウンロードリンクの作成
     const link = document.createElement('a');
@@ -1223,14 +1455,18 @@ function downloadSVG() {
     console.log('SVGダウンロード完了:', filename);
   } catch (error) {
     console.error('ダウンロードエラー:', error);
-    alert('ダウンロードに失敗しました: ' + error.message);
+    showErrorMessage('ダウンロードに失敗しました: ' + error.message, 'やり直す', function() {
+      convertToSVG(); // エラーが発生した場合、自動的に再変換を試みる
+    });
   }
-}
-
-/**
- * UIをリセットする
- */
-function resetUI() {
+  }
+  
+  /**
+   * UIをリセットする
+   */
+  function resetUI() {
+  console.log('UIをリセットします');
+  
   // 各要素の参照を取得
   const uploadArea = document.getElementById('upload-area');
   const fileInput = document.getElementById('file-input');
@@ -1242,7 +1478,7 @@ function resetUI() {
   const progressContainer = document.getElementById('progress-container');
   const layersContainer = document.getElementById('layers-container');
   const layersList = document.getElementById('layers-list');
-  const controlPanel = document.querySelector('.button-container');
+  const controlPanel = document.querySelector('.control-panel');
   const downloadButton = document.getElementById('download-button');
   const colorMode = document.getElementById('color-mode');
   const threshold = document.getElementById('threshold');
@@ -1260,25 +1496,31 @@ function resetUI() {
   const photopeaCompatCheckbox = document.getElementById('photopea-compat');
   const objectDetectionCheckbox = document.getElementById('object-detection');
 
-  // 各要素を初期状態に戻す
+    // 各要素を初期状態に戻す
   if (uploadArea) {
     uploadArea.innerHTML = `
       <p>画像をここにドラッグ&ドロップ</p>
       <p>または</p>
-      <label for="file-input" class="upload-button">画像を選択</label>
+      <div class="upload-button">画像を選択</div>
     `;
+    
+    // イベントリスナーを再設定
+    uploadArea.addEventListener('dragover', handleDragOver);
+    uploadArea.addEventListener('dragleave', handleDragLeave);
+    uploadArea.addEventListener('drop', handleDrop);
+    uploadArea.addEventListener('click', handleUploadAreaClick);
     
     // "画像を選択"ボタンにイベントリスナーを追加
     const selectButton = uploadArea.querySelector('.upload-button');
     if (selectButton) {
       selectButton.addEventListener('click', handleFileButtonClick);
     }
-  }
-  
-  // 画像参照をクリア
+    }
+    
+    // 画像参照をクリア
   if (originalImage && originalImage.src && originalImage.src.startsWith('blob:')) {
-    URL.revokeObjectURL(originalImage.src);
-  }
+      URL.revokeObjectURL(originalImage.src);
+    }
   
   if (originalImage) originalImage.src = '';
   if (svgPreview) svgPreview.innerHTML = '';
@@ -1306,69 +1548,68 @@ function resetUI() {
     progressContainer.style.display = 'none';
   }
   
-  if (controlPanel) {
-    controlPanel.style.display = 'flex';
-  }
-  
-  // 現在のファイルとSVGデータをクリア
-  currentFile = null;
-  currentSvgData = null;
-  currentLayers = [];
-  
-  // ファイル入力をリセット
-  if (fileInput) {
-    fileInput.value = '';
-  }
-  
-  // 状態フラグをリセット
-  fileInputClicked = false;
-  
-  // 設定を初期値に戻す
-  if (threshold) threshold.value = 128;
-  if (colorMode) colorMode.value = 'color';
-  if (simplify) simplify.value = 0.5;
-  
-  // 追加設定を初期値に戻す
-  if (colorQuantization) colorQuantization.value = 16;
-  if (colorQuantizationValue) {
-    colorQuantizationValue.textContent = '16';
-  }
-  
-  if (blurRadius) blurRadius.value = 0;
-  if (blurRadiusValue) {
-    blurRadiusValue.textContent = '0';
-  }
-  
-  if (strokeWidth) strokeWidth.value = 0;
-  if (strokeWidthValue) {
-    strokeWidthValue.textContent = '0';
-  }
-  
-  if (enableLayersCheckbox) {
-    enableLayersCheckbox.checked = true;
-  }
-  
-  if (illustratorCompatCheckbox) {
-    illustratorCompatCheckbox.checked = true;
-  }
-  
-  if (photopeaCompatCheckbox) {
-    photopeaCompatCheckbox.checked = true;
-  }
-  
-  if (objectDetectionCheckbox) {
-    objectDetectionCheckbox.checked = true;
-  }
-  
   // ダウンロードボタンを無効化
   if (downloadButton) {
     downloadButton.disabled = true;
   }
+    
+    // 現在のファイルとSVGデータをクリア
+    currentFile = null;
+    currentSvgData = null;
+  currentLayers = [];
+    
+    // ファイル入力をリセット
+  if (fileInput) {
+    fileInput.value = '';
+  }
+    
+    // 状態フラグをリセット
+    fileInputClicked = false;
+    
+    // 設定を初期値に戻す
+  if (threshold) {
+    threshold.value = 128;
+    if (thresholdValue) thresholdValue.textContent = '128';
+  }
   
-  // 設定を更新
-  updateSettings();
+  if (colorMode) colorMode.value = 'color';
   
-  console.log('UI リセット完了');
+  if (simplify) {
+    simplify.value = 0.5;
+    if (simplifyValue) simplifyValue.textContent = '0.5';
+  }
+  
+  // 追加設定を初期値に戻す
+  if (colorQuantization) {
+    colorQuantization.value = 16;
+    if (colorQuantizationValue) colorQuantizationValue.textContent = '16';
+  }
+  
+  if (blurRadius) {
+    blurRadius.value = 0;
+    if (blurRadiusValue) blurRadiusValue.textContent = '0';
+  }
+  
+  if (strokeWidth) {
+    strokeWidth.value = 0;
+    if (strokeWidthValue) strokeWidthValue.textContent = '0';
+  }
+  
+  if (enableLayersCheckbox) enableLayersCheckbox.checked = true;
+  if (illustratorCompatCheckbox) illustratorCompatCheckbox.checked = true;
+  if (photopeaCompatCheckbox) photopeaCompatCheckbox.checked = true;
+  if (objectDetectionCheckbox) objectDetectionCheckbox.checked = true;
+  
+  // エラーメッセージをクリア
+  const errorContainer = document.querySelector('.error-message');
+  if (errorContainer) {
+    errorContainer.remove();
+  }
+  
+  console.log('UIのリセットが完了しました');
+  
+  // 設定表示を更新
+    updateSettings();
 }
 
 /**
@@ -1409,3 +1650,216 @@ function hideAllLayers() {
 
 // resetUI関数をグローバルに公開
 window.resetUI = resetUI; 
+
+/**
+ * ImageTracerを使用したフォールバック処理
+ * SVGLayerAdapterが使用できない場合や失敗した場合に利用
+ * @param {File} file - 変換対象のファイル
+ * @param {Object} options - 変換オプション
+ * @param {Function} resolve - 成功時の解決関数
+ * @param {Function} reject - 失敗時の拒否関数
+ */
+function fallbackToImageTracer(file, options, resolve, reject) {
+  console.log('ImageTracerにフォールバックします');
+  
+  // ImageTracerが利用可能か確認
+  if (typeof ImageTracer === 'undefined') {
+    console.error('ImageTracerが見つかりません');
+    useImageBasedFallback(file, options, resolve, reject);
+      return;
+    }
+    
+  if (typeof ImageTracer.fileToSVG !== 'function') {
+    console.error('ImageTracer.fileToSVG関数が見つかりません');
+    useImageBasedFallback(file, options, resolve, reject);
+    return;
+  }
+  
+  // タイムアウト設定
+  const timeoutId = setTimeout(() => {
+    console.error('ImageTracer変換がタイムアウトしました');
+    useImageBasedFallback(file, options, resolve, reject);
+  }, options.timeout || 30000);
+  
+  // ImageTracerで変換を実行
+  try {
+    console.log('ImageTracerでSVG変換を実行');
+    ImageTracer.fileToSVG(file, options, function(error, svgData) {
+      clearTimeout(timeoutId);
+      
+      if (error) {
+        console.error('ImageTracer変換エラー:', error);
+        useImageBasedFallback(file, options, resolve, reject);
+      } else if (!svgData || typeof svgData !== 'string' || !svgData.includes('<svg')) {
+        console.error('ImageTracerから無効なSVGデータが返されました');
+        useImageBasedFallback(file, options, resolve, reject);
+      } else {
+        console.log('ImageTracer変換成功');
+        
+        try {
+          // 成功時の処理を実行
+          handleSuccessfulConversion(svgData);
+        } catch (handlerError) {
+          console.error('成功ハンドラでエラー:', handlerError);
+          resolve(svgData); // エラーでも元のSVGデータを返す
+        }
+      }
+    });
+  } catch (tracerError) {
+    clearTimeout(timeoutId);
+    console.error('ImageTracer実行エラー:', tracerError);
+    useImageBasedFallback(file, options, resolve, reject);
+  }
+}
+
+/**
+ * 画像ベースのフォールバック処理
+ * すべてのSVG変換方法が失敗した場合の最終手段
+ * @param {File} file - 変換対象のファイル
+ * @param {Object} options - 変換オプション
+ * @param {Function} resolve - 成功時の解決関数
+ * @param {Function} reject - 失敗時の拒否関数 
+ */
+function useImageBasedFallback(file, options, resolve, reject) {
+  console.log('画像ベースのフォールバック処理を開始');
+  
+  try {
+    const img = new Image();
+    const objectURL = URL.createObjectURL(file);
+    
+    // タイムアウト設定
+    const timeoutId = setTimeout(() => {
+      console.error('画像読み込みがタイムアウトしました');
+      URL.revokeObjectURL(objectURL);
+      createErrorSVG('画像の読み込みタイムアウト', resolve);
+    }, 10000);
+    
+    img.onload = function() {
+      clearTimeout(timeoutId);
+      
+      try {
+        // 画像をキャンバスに描画
+        const canvas = document.createElement('canvas');
+        let width = img.naturalWidth;
+        let height = img.naturalHeight;
+        const maxSize = options.maxImageSize || 2000;
+        
+        // 必要に応じてリサイズ
+        if (width > maxSize || height > maxSize) {
+          if (width > height) {
+            height = Math.floor(height * (maxSize / width));
+            width = maxSize;
+          } else {
+            width = Math.floor(width * (maxSize / height));
+            height = maxSize;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // カラーモードに応じた処理
+        let svgData;
+        
+        if (options.colorMode === 'bw') {
+          // 白黒モードの場合は2値化処理
+          svgData = createBWFallbackSVG(canvas, options.threshold || 128);
+        } else {
+          // カラーモードの場合は画像を埋め込む
+          const dataURL = canvas.toDataURL('image/png');
+          svgData = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+              <g id="Layers" data-photopea-root="true">
+                <g id="layer_image" data-photopea-layer="true">
+                  <image width="${width}" height="${height}" href="${dataURL}" />
+                </g>
+              </g>
+            </svg>
+          `;
+        }
+        
+        // URLをクリーンアップ
+        URL.revokeObjectURL(objectURL);
+        resolve(svgData);
+        
+      } catch (canvasError) {
+        console.error('キャンバス処理エラー:', canvasError);
+        URL.revokeObjectURL(objectURL);
+        createErrorSVG(canvasError.message, resolve);
+      }
+    };
+    
+    img.onerror = function(error) {
+      clearTimeout(timeoutId);
+      console.error('画像読み込みエラー:', error);
+      URL.revokeObjectURL(objectURL);
+      createErrorSVG('画像の読み込みに失敗しました', resolve);
+    };
+    
+    img.src = objectURL;
+    
+  } catch (error) {
+    console.error('画像フォールバックエラー:', error);
+    createErrorSVG(error.message, resolve);
+  }
+}
+
+/**
+ * 白黒モードのフォールバックSVG生成
+ * @param {HTMLCanvasElement} canvas - 処理対象のキャンバス
+ * @param {number} threshold - 2値化の閾値 (0-255)
+ * @returns {string} SVGデータ
+ */
+function createBWFallbackSVG(canvas, threshold) {
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  
+  // 2値化処理
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    
+    // グレースケール変換
+    const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+    
+    // 閾値で2値化
+    const value = brightness >= threshold ? 255 : 0;
+    data[i] = data[i + 1] = data[i + 2] = value;
+  }
+  
+  ctx.putImageData(imgData, 0, 0);
+  
+  // SVG生成
+  const dataURL = canvas.toDataURL('image/png');
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="0 0 ${canvas.width} ${canvas.height}">
+      <g id="Layers" data-photopea-root="true">
+        <g id="layer_bw" data-photopea-layer="true">
+          <image width="${canvas.width}" height="${canvas.height}" href="${dataURL}" />
+        </g>
+      </g>
+    </svg>
+  `;
+}
+
+/**
+ * エラーメッセージを含むSVG画像を生成
+ * @param {string} errorMessage - 表示するエラーメッセージ
+ * @param {Function} resolve - 解決関数
+ */
+function createErrorSVG(errorMessage, resolve) {
+  const width = 400;
+  const height = 300;
+  const svgData = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <rect width="100%" height="100%" fill="#f8f9fa" />
+      <text x="50%" y="50%" font-family="sans-serif" font-size="14" text-anchor="middle" fill="#dc3545">エラー: ${errorMessage || '変換に失敗しました'}</text>
+    </svg>
+  `;
+  
+  resolve(svgData);
+}

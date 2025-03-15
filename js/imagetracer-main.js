@@ -899,4 +899,154 @@ window.ImageTracer = (function() {
       createTimer: utils && utils.createTimer ? utils.createTimer : null
     }
   };
-})(); 
+})();
+
+// 初期化イベントを追加
+document.addEventListener('DOMContentLoaded', function() {
+  console.log('ImageTracer拡張モジュールを初期化中...');
+  initImageTracer();
+});
+
+/**
+ * ImageTracerを初期化し、拡張機能を統合
+ */
+function initImageTracer() {
+  // グローバルのImageTracerが存在しない場合は作成
+  if (typeof window.ImageTracer === 'undefined') {
+    window.ImageTracer = {};
+  }
+  
+  // 既存のImageTracerのメソッドをバックアップ
+  const originalMethods = {
+    fileToSVG: window.ImageTracer.fileToSVG,
+    extractLayers: window.ImageTracer.extractLayers,
+    setLayerVisibility: window.ImageTracer.setLayerVisibility,
+    updateLayerColor: window.ImageTracer.updateLayerColor
+  };
+  
+  // SVGレイヤーアダプターが利用可能な場合は、それを優先して使用
+  if (typeof window.SVGLayerAdapter !== 'undefined') {
+    console.log('SVGレイヤーアダプターを利用してImageTracerを拡張します');
+    
+    // 新しいfileToSVG実装
+    window.ImageTracer.fileToSVG = function(file, options, callback) {
+      console.log('拡張版 fileToSVG を使用');
+      
+      // 進捗を表示するラッパー関数
+      const progressWrapper = function(stage, percent) {
+        console.log(`SVG変換進捗: ${stage} (${percent}%)`);
+        if (options && typeof options.progressCallback === 'function') {
+          options.progressCallback(stage, percent);
+        }
+      };
+      
+      // オプションが関数の場合（コールバック）、引数を調整
+      if (typeof options === 'function') {
+        callback = options;
+        options = {};
+      }
+      
+      // オプションを拡張
+      const enhancedOptions = {
+        ...options,
+        progressCallback: progressWrapper
+      };
+      
+      // 既存実装をフォールバックとして指定
+      try {
+        // 拡張版を使用
+        window.SVGLayerAdapter.fileToSVG(file, enhancedOptions, function(error, svgData) {
+          if (error) {
+            console.warn('拡張版SVG変換でエラーが発生しました、オリジナル実装を試みます:', error);
+            
+            // オリジナル実装が存在する場合はフォールバック
+            if (originalMethods.fileToSVG) {
+              originalMethods.fileToSVG(file, options, callback);
+            } else {
+              // オリジナル実装もない場合はエラーをそのまま返す
+              callback(error, null);
+            }
+          } else {
+            callback(null, svgData);
+          }
+        });
+      } catch (error) {
+        console.error('SVGレイヤーアダプター使用中にエラーが発生しました:', error);
+        
+        // オリジナル実装が存在する場合はフォールバック
+        if (originalMethods.fileToSVG) {
+          originalMethods.fileToSVG(file, options, callback);
+        } else {
+          // オリジナル実装もない場合はエラーを返す
+          setTimeout(() => {
+            callback(error, null);
+          }, 0);
+        }
+      }
+    };
+    
+    // 新しいextractLayers実装
+    window.ImageTracer.extractLayers = function(svgString) {
+      console.log('拡張版 extractLayers を使用');
+      
+      try {
+        return window.SVGLayerAdapter.extractLayers(svgString);
+      } catch (error) {
+        console.warn('拡張版レイヤー抽出でエラーが発生しました:', error);
+        
+        // オリジナル実装が存在する場合はフォールバック
+        if (originalMethods.extractLayers) {
+          return originalMethods.extractLayers(svgString);
+        }
+        
+        // どちらも失敗した場合は空配列を返す
+        return [];
+      }
+    };
+    
+    // 新しいsetLayerVisibility実装
+    window.ImageTracer.setLayerVisibility = function(svgString, layerId, visible) {
+      console.log(`拡張版 setLayerVisibility を使用: レイヤー ${layerId} を ${visible ? '表示' : '非表示'} に設定`);
+      
+      try {
+        return window.SVGLayerAdapter.setLayerVisibility(svgString, layerId, visible);
+      } catch (error) {
+        console.warn('拡張版レイヤー表示切替でエラーが発生しました:', error);
+        
+        // オリジナル実装が存在する場合はフォールバック
+        if (originalMethods.setLayerVisibility) {
+          return originalMethods.setLayerVisibility(svgString, layerId, visible);
+        }
+        
+        // どちらも失敗した場合は元のSVG文字列を返す
+        return svgString;
+      }
+    };
+    
+    // 新しいupdateLayerColor実装
+    window.ImageTracer.updateLayerColor = function(svgString, layerId, newColor) {
+      console.log(`拡張版 updateLayerColor を使用: レイヤー ${layerId} の色を ${newColor} に変更`);
+      
+      try {
+        return window.SVGLayerAdapter.updateLayerColor(svgString, layerId, newColor);
+      } catch (error) {
+        console.warn('拡張版レイヤー色変更でエラーが発生しました:', error);
+        
+        // オリジナル実装が存在する場合はフォールバック
+        if (originalMethods.updateLayerColor) {
+          return originalMethods.updateLayerColor(svgString, layerId, newColor);
+        }
+        
+        // どちらも失敗した場合は元のSVG文字列を返す
+        return svgString;
+      }
+    };
+    
+    console.log('ImageTracer拡張機能の統合が完了しました');
+  } else {
+    console.warn('SVGレイヤーアダプターが見つかりません。オリジナルのImageTracer実装を使用します。');
+  }
+}
+
+// 初期化関数をグローバルに公開
+window.initImageTracer = initImageTracer; 
