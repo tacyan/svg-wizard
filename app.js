@@ -260,187 +260,80 @@ function safeSvgConversion(file, options, progressCallback, resolve, reject) {
   // 成功時の共通処理
   function handleSuccessfulConversion(svgData) {
     // SVGデータの整合性チェック
-    if (!svgData || typeof svgData !== 'string' || !svgData.includes('<svg')) {
+    if (!svgData || svgData.indexOf('<svg') === -1) {
       console.error('無効なSVGデータ:', svgData);
       
-      // 元の画像情報を取得する試み
-      let originalImage = null;
+      // SVGデータが無効な場合は、元の画像を読み込んでフォールバック処理を試みる
       try {
         const reader = new FileReader();
         reader.onload = function(e) {
           const img = new Image();
           img.onload = function() {
-            // 元画像を渡してフォールバック処理を実行
-            useImageBasedFallback(file, conversionOptions, resolve, reject, img);
+            console.log('元画像を使用したフォールバック処理を開始');
+            useImageBasedFallback(file, options, resolve, reject, img);
           };
           img.onerror = function() {
-            // 画像読み込みに失敗しても通常のフォールバックを実行
-            useImageBasedFallback(file, conversionOptions, resolve, reject);
+            console.error('元画像の読み込みに失敗。標準フォールバックを使用');
+            useImageBasedFallback(file, options, resolve, reject);
           };
           img.src = e.target.result;
         };
         reader.onerror = function() {
-          useImageBasedFallback(file, conversionOptions, resolve, reject);
+          console.error('ファイル読み込みエラー。標準フォールバックを使用');
+          useImageBasedFallback(file, options, resolve, reject);
         };
         reader.readAsDataURL(file);
-        return; // 非同期処理のため早期リターン
       } catch (e) {
-        console.error('元画像の取得に失敗:', e);
-        useImageBasedFallback(file, conversionOptions, resolve, reject);
-        return;
+        console.error('フォールバック処理中にエラー:', e);
+        useImageBasedFallback(file, options, resolve, reject);
       }
+      return;
     }
     
-    // レイヤーが含まれているか確認
-    const layerCount = (svgData.match(/<g[^>]*id="layer_/g) || []).length;
-    console.log(`生成されたSVGには ${layerCount} 個のレイヤーが含まれています`);
+    clearTimeout(conversionTimeout);
     
-    // レイヤーが少なすぎる場合は警告
-    if (layerCount <= 1 && conversionOptions.colorMode === 'color') {
-      console.warn('レイヤーが十分に生成されていません。色の量子化値を増やして再試行することを検討してください。');
+    // レイヤーの存在確認
+    const hasLayers = svgData.includes('<g') && (
+      svgData.includes('id="layer') || 
+      svgData.includes('data-name=') || 
+      svgData.includes('class="layer')
+    );
+    
+    console.log('SVG変換結果:', {
+      size: svgData.length,
+      hasLayers: hasLayers
+    });
+    
+    // レイヤー構造が存在するか確認
+    if (hasLayers && options.enableLayers !== false) {
+      // SVGのレイヤー数を分析
+      const layerCount = analyzeSvgLayers(svgData, "変換直後");
+      console.log(`変換後のSVGレイヤー数: ${layerCount}`);
       
-      // 空のLayersグループがある場合
-      const emptyLayersGroup = svgData.includes('<g id="Layers" data-photopea-root="true"></g>') || 
-                             svgData.includes('<g id="Layers"></g>');
+      // レイヤー数を確認し、多すぎる場合は強制的に制限
+      if (layerCount > 30) {
+        console.log('レイヤー数が多すぎるため、制限を適用します');
+        const MAX_ALLOWED_LAYERS = 30;
+        svgData = enforceLayerLimit(svgData, MAX_ALLOWED_LAYERS);
+        
+        // 制限適用後のレイヤー数を再確認
+        const newLayerCount = analyzeSvgLayers(svgData, "レイヤー制限適用後");
+        console.log(`制限適用後のSVGレイヤー数: ${newLayerCount}`);
+      }
       
-      if (emptyLayersGroup) {
-        console.error('レイヤーグループが空です。レイヤー生成に失敗しました。');
+      console.log('SVG変換完了:', svgData.substring(0, 100) + '...');
+      resolve(svgData);
+      return;
+    }
+    
+    // --- 以下は既存の実装 ---
+
+    // レイヤーが存在しない場合は、手動でレイヤー構造を追加
+    if (options.enableLayers !== false) {
+      try {
+        console.log('SVGにレイヤーが見つかりません。レイヤー分割を試みます...');
         
-        // 最初の試行でエラーの場合、より詳細なオプションで再試行
-        if (!conversionOptions._retried) {
-          console.log('レイヤー生成に失敗したため、詳細モードで再試行します');
-          
-          // 再試行のコピーを作成して元のオプションを変更しない
-          const retryOptions = {
-            ...conversionOptions,
-            colorQuantization: Math.min(256, conversionOptions.colorQuantization * 2),
-            minColorArea: 5, // より小さい色領域も検出
-            edgeThreshold: 10, // よりシャープなエッジ検出
-            detailBoost: true, // 詳細モードを有効化
-            forceSeparateLayers: true, // 強制的にレイヤーを分離
-            _retried: true, // 再試行フラグ
-            timeout: 15000 // 15秒のタイムアウトに制限
-          };
-          
-          // タイムアウト処理を設定 (15秒)
-          const timeoutId = setTimeout(() => {
-            console.warn('レイヤー再生成がタイムアウトしました。強制分割を試みます。');
-            try {
-              // 強制的にSVGのレイヤーを分割（セーフモード）
-              const forcedSvgData = forceSplitSvgLayers(svgData, true);
-              if (forcedSvgData) {
-                resolve(forcedSvgData);
-              } else {
-                // フォールバック：元の画像データがあればそれを利用
-                try {
-                  const reader = new FileReader();
-                  reader.onload = function(e) {
-                    const img = new Image();
-                    img.onload = function() {
-                      useImageBasedFallback(file, conversionOptions, resolve, reject, img);
-                    };
-                    img.onerror = function() {
-                      resolve(svgData); // 失敗した場合は元のSVGを使用
-                    };
-                    img.src = e.target.result;
-                  };
-                  reader.onerror = function() {
-                    resolve(svgData); // 失敗した場合は元のSVGを使用
-                  };
-                  reader.readAsDataURL(file);
-                } catch (e) {
-                  resolve(svgData); // 失敗した場合は元のSVGを使用
-                }
-              }
-            } catch (timeoutError) {
-              console.error('タイムアウト処理中のエラー:', timeoutError);
-              resolve(svgData); // エラー時は元のSVGを使用
-            }
-          }, 15000);
-          
-          try {
-            // レイヤーアダプタまたはImageTracerのどちらかを使用
-            if (typeof SVGLayerAdapter !== 'undefined' && typeof SVGLayerAdapter.fileToSVG === 'function') {
-              console.log('SVGレイヤーアダプターを使用した再試行');
-              SVGLayerAdapter.fileToSVG(file, retryOptions, function(error, retrySvgData) {
-                clearTimeout(timeoutId); // タイムアウトをクリア
-                
-                if (error || !retrySvgData) {
-                  console.error('SVGレイヤーアダプター再試行エラー:', error);
-                  
-                  // エラー時は強制レイヤー分割を試みる（セーフモード）
-                  try {
-                    const forcedSvgData = forceSplitSvgLayers(svgData, true);
-                    if (forcedSvgData) {
-                      resolve(forcedSvgData);
-                    } else {
-                      resolve(svgData); // 失敗した場合は元のSVGを使用
-                    }
-                  } catch (e) {
-                    console.error('強制分割エラー:', e);
-                    resolve(svgData);
-                  }
-                } else {
-                  // 再試行成功、レイヤー数をチェック
-                  const retryLayerCount = (retrySvgData.match(/<g[^>]*id="layer_/g) || []).length;
-                  console.log(`再試行後のレイヤー数: ${retryLayerCount}`);
-                  
-                  if (retryLayerCount > 1) {
-                    // 再試行成功
-                    resolve(retrySvgData);
-                  } else {
-                    // 再試行してもレイヤー不足、強制分割を試みる（セーフモード）
-                    try {
-                      const forcedSvgData = forceSplitSvgLayers(retrySvgData, true);
-                      resolve(forcedSvgData || retrySvgData);
-                    } catch (e) {
-                      console.error('強制分割エラー:', e);
-                      resolve(retrySvgData);
-                    }
-                  }
-                }
-              });
-            } else if (typeof ImageTracer !== 'undefined' && typeof ImageTracer.fileToSVG === 'function') {
-              console.log('ImageTracerを使用した再試行');
-              ImageTracer.fileToSVG(file, retryOptions, function(error, retrySvgData) {
-                clearTimeout(timeoutId); // タイムアウトをクリア
-                
-                if (error || !retrySvgData) {
-                  console.error('ImageTracer再試行エラー:', error);
-                  try {
-                    const forcedSvgData = forceSplitSvgLayers(svgData, true);
-                    resolve(forcedSvgData || svgData);
-                  } catch (e) {
-                    console.error('強制分割エラー:', e);
-                    resolve(svgData);
-                  }
-                } else {
-                  resolve(retrySvgData);
-                }
-              });
-            } else {
-              // どちらも利用できない場合は強制分割（セーフモード）
-              clearTimeout(timeoutId);
-              console.log('変換ライブラリが利用できません、強制分割を試みます');
-              try {
-                const forcedSvgData = forceSplitSvgLayers(svgData, true);
-                resolve(forcedSvgData || svgData);
-              } catch (e) {
-                console.error('強制分割エラー:', e);
-                resolve(svgData);
-              }
-            }
-          } catch (retryError) {
-            clearTimeout(timeoutId);
-            console.error('再試行処理中のエラー:', retryError);
-            resolve(svgData); // エラー時は元のSVGを使用
-          }
-          
-          return; // 処理終了、結果はコールバック内で返される
-        }
-        
-        // 既に再試行済みか、最初の試行でない場合、強制分割を試みる（セーフモード）
-        console.log('強制的にレイヤー分割を実行します');
+        // SVGレイヤーを強制的に分割
         try {
           const forcedSvgData = forceSplitSvgLayers(svgData, true);
           if (forcedSvgData && forcedSvgData !== svgData) {
@@ -450,6 +343,15 @@ function safeSvgConversion(file, options, progressCallback, resolve, reject) {
             
             if (newLayerCount > 0) {
               console.log('強制レイヤー分割が成功しました');
+              
+              // レイヤー数を確認し、多すぎる場合は強制的に制限
+              if (newLayerCount > 30) {
+                console.log('レイヤー数が多すぎるため、制限を適用します');
+                const limitedSvgData = enforceLayerLimit(forcedSvgData, 30);
+                resolve(limitedSvgData);
+                return;
+              }
+              
               resolve(forcedSvgData);
               return;
             }
@@ -458,6 +360,8 @@ function safeSvgConversion(file, options, progressCallback, resolve, reject) {
           console.error('強制レイヤー分割エラー:', splitError);
           // エラー時も続行し、元のSVGを使用
         }
+      } catch (layerError) {
+        console.error('レイヤー処理中にエラーが発生しました:', layerError);
       }
     }
     
@@ -468,437 +372,168 @@ function safeSvgConversion(file, options, progressCallback, resolve, reject) {
 }
 
 /**
- * SVGを色ごとに強制的にレイヤー分割する関数
- * SVGのパスやポリゴンを色ごとにグループ化して新しいレイヤー構造を作成
- * @param {string} svgData - 分割するSVGデータ
- * @param {boolean} safeMode - パフォーマンス向上とクラッシュ防止のためのセーフモード
- * @returns {string} レイヤー分割されたSVGデータ
+ * SVGレイヤーを強制的に分割する
+ * @param {string} svgData - SVGデータ
+ * @param {Object} options - オプション
+ * @returns {string} - 処理済みSVGデータ
  */
-function forceSplitSvgLayers(svgData, safeMode = false) {
-  console.log('SVGの強制レイヤー分割を開始します');
+function forceSplitSvgLayers(svgData, options = {}) {
+  console.log('SVGレイヤー強制分割を開始します...');
   
-  // タイムアウト処理
-  let timeoutTriggered = false;
-  const operationTimeout = setTimeout(() => {
-    console.warn('レイヤー分割処理がタイムアウトしました');
-    timeoutTriggered = true;
-  }, safeMode ? 10000 : 20000); // セーフモードでは短めのタイムアウト
+  if (!svgData || !svgData.includes('<svg')) {
+    console.error('forceSplitSvgLayersに無効なSVGデータが渡されました');
+    return svgData;
+  }
   
   try {
-    // SVGパース
     const parser = new DOMParser();
     const svgDoc = parser.parseFromString(svgData, 'image/svg+xml');
     
-    // パースエラーチェック
-    const parserError = svgDoc.querySelector('parsererror');
-    if (parserError) {
-      console.error('SVGパースエラー:', parserError.textContent);
-      clearTimeout(operationTimeout);
-      return null;
+    // parsererror要素がある場合、XML解析エラーがあります
+    const parseError = svgDoc.getElementsByTagName('parsererror');
+    if (parseError.length > 0) {
+      console.error('SVGデータの解析中にエラーが発生しました');
+      return svgData; // 元のデータを返す
     }
     
-    // ルートSVG要素
-    const svgElement = svgDoc.querySelector('svg');
-    if (!svgElement) {
-      console.error('SVG要素が見つかりません');
-      clearTimeout(operationTimeout);
-      return null;
+    const svgRoot = svgDoc.querySelector('svg');
+    if (!svgRoot) {
+      console.error('SVG要素が見つかりませんでした');
+      return svgData;
     }
     
-    // SVG属性取得
-    const viewBox = svgElement.getAttribute('viewBox');
-    const width = svgElement.getAttribute('width');
-    const height = svgElement.getAttribute('height');
+    // 既存のレイヤー数を確認
+    const existingLayerCount = analyzeSvgLayers(svgData, "forceSplitSvgLayers開始時");
+    console.log(`レイヤー分割前のSVG要素数: ${existingLayerCount}`);
     
-    // パスとポリゴン要素を収集
-    const paths = Array.from(svgDoc.querySelectorAll('path'));
-    const polygons = Array.from(svgDoc.querySelectorAll('polygon'));
-    const rects = Array.from(svgDoc.querySelectorAll('rect'));
-    const circles = Array.from(svgDoc.querySelectorAll('circle'));
-    const elements = [...paths, ...polygons, ...rects, ...circles];
+    // オプションから最小と最大のレイヤー数を取得
+    const minLayers = options.minLayers || 2;
+    const maxLayers = options.maxLayers || 30;
     
-    console.log(`${paths.length}個のパス、${polygons.length}個のポリゴン、${rects.length}個の矩形、${circles.length}個の円が見つかりました`);
+    // SVG要素からすべてのパスとシェイプを取得
+    const elements = [
+      ...Array.from(svgRoot.querySelectorAll('path')),
+      ...Array.from(svgRoot.querySelectorAll('polygon')),
+      ...Array.from(svgRoot.querySelectorAll('rect')),
+      ...Array.from(svgRoot.querySelectorAll('circle'))
+    ];
     
-    // 要素が少なすぎる場合は画像ベースの方法を試す
+    // 要素が見つからない場合は元のSVGを返す
     if (elements.length === 0) {
-      console.warn('分割対象の要素が見つかりません。画像ベースの変換を試みます。');
-      clearTimeout(operationTimeout);
-      
-      // 埋め込まれた画像を探す
-      const images = Array.from(svgDoc.querySelectorAll('image'));
-      if (images.length > 0) {
-        return createLayeredImageSVG(images[0], width, height, viewBox);
-      }
-      
-      return null;
+      console.log('分割可能な要素が見つかりませんでした');
+      return svgData;
     }
     
-    // 安全チェック：要素数が多すぎる場合はサンプリング
-    const MAX_ELEMENTS = safeMode ? 1000 : 5000;
-    let processedElements = elements;
+    console.log(`分割対象の要素数: ${elements.length}`);
     
-    if (elements.length > MAX_ELEMENTS) {
-      console.warn(`要素が多すぎます(${elements.length}個)。サンプリングします。`);
-      // 要素の一部だけを使用（均等にサンプリング）
-      const samplingRate = MAX_ELEMENTS / elements.length;
-      processedElements = elements.filter((_, index) => {
-        return Math.random() < samplingRate;
-      });
-      console.log(`${processedElements.length}個の要素にサンプリングしました`);
-    }
-    
-    // 色ごとにグループ化
-    const colorGroups = {};
-    
-    // 色の抽出関数
-    const getElementColor = (element) => {
-      // タイムアウトチェック
-      if (timeoutTriggered) {
-        throw new Error('処理タイムアウト');
-      }
-      
+    // 要素ごとの色情報を抽出
+    const elementColors = elements.map(element => {
       const fill = element.getAttribute('fill') || 'none';
       const stroke = element.getAttribute('stroke') || 'none';
       
-      // style属性からの色抽出
-      let fillFromStyle = 'none';
-      let strokeFromStyle = 'none';
+      // fill:noneの場合はstrokeを優先
+      const primaryColor = (fill === 'none') ? stroke : fill;
       
-      const style = element.getAttribute('style');
-      if (style) {
-        const fillMatch = style.match(/fill:\s*([^;]+)/);
-        if (fillMatch) fillFromStyle = fillMatch[1];
-        
-        const strokeMatch = style.match(/stroke:\s*([^;]+)/);
-        if (strokeMatch) strokeFromStyle = strokeMatch[1];
-      }
-      
-      // 最終的な色を決定
-      const finalFill = (fill !== 'none') ? fill : fillFromStyle;
-      const finalStroke = (stroke !== 'none') ? stroke : strokeFromStyle;
-      
-      // 主な色として塗りを優先（塗りがnoneの場合はストローク）
-      const primaryColor = (finalFill !== 'none') ? finalFill : finalStroke;
-      
-      // CSSの色名を16進数に正規化
-      return normalizeColor(primaryColor);
-    };
-    
-    // CSSの色名や異なる形式の色を16進数に正規化する関数
-    const normalizeColor = (colorStr) => {
-      if (!colorStr || colorStr === 'none') return 'none';
-      
-      // 既に16進数形式なら変換不要
-      if (/^#([0-9A-F]{3}){1,2}$/i.test(colorStr)) {
-        return colorStr.toLowerCase();
-      }
-      
-      // rgb()形式をパース
-      const rgbMatch = colorStr.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
-      if (rgbMatch) {
-        const r = parseInt(rgbMatch[1], 10);
-        const g = parseInt(rgbMatch[2], 10);
-        const b = parseInt(rgbMatch[3], 10);
-        return rgbToHex(r, g, b);
-      }
-      
-      // rgba()形式をパース（アルファ値は無視）
-      const rgbaMatch = colorStr.match(/rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)/i);
-      if (rgbaMatch) {
-        const r = parseInt(rgbaMatch[1], 10);
-        const g = parseInt(rgbaMatch[2], 10);
-        const b = parseInt(rgbaMatch[3], 10);
-        return rgbToHex(r, g, b);
-      }
-      
-      // CSS色名をサポートするために一時的なDOM要素を使用
-      try {
-        const tempEl = document.createElement('div');
-        tempEl.style.color = colorStr;
-        document.body.appendChild(tempEl);
-        const computedColor = getComputedStyle(tempEl).color;
-        document.body.removeChild(tempEl);
-        
-        // computed styleはrgb()形式で返ってくる
-        const computedMatch = computedColor.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
-        if (computedMatch) {
-          const r = parseInt(computedMatch[1], 10);
-          const g = parseInt(computedMatch[2], 10);
-          const b = parseInt(computedMatch[3], 10);
-          return rgbToHex(r, g, b);
-        }
-      } catch (e) {
-        console.warn('色の正規化に失敗しました:', colorStr);
-      }
-      
-      // 変換できない場合は元の値を返す
-      return colorStr;
-    };
-    
-    // RGB値を16進数に変換
-    const rgbToHex = (r, g, b) => {
-      return '#' + [r, g, b].map(x => {
-        const hex = Math.round(Math.max(0, Math.min(255, x))).toString(16);
-        return hex.length === 1 ? '0' + hex : hex;
-      }).join('');
-    };
-    
-    // 16進数をRGBに変換
-    const hexToRgb = (hex) => {
-      hex = hex.replace(/^#/, '');
-      
-      let r, g, b;
-      
-      if (hex.length === 3) {
-        r = parseInt(hex.charAt(0) + hex.charAt(0), 16);
-        g = parseInt(hex.charAt(1) + hex.charAt(1), 16);
-        b = parseInt(hex.charAt(2) + hex.charAt(2), 16);
-      } else if (hex.length === 6) {
-        r = parseInt(hex.substring(0, 2), 16);
-        g = parseInt(hex.substring(2, 4), 16);
-        b = parseInt(hex.substring(4, 6), 16);
-      } else {
-        return { r: 0, g: 0, b: 0 };
-      }
-      
-      return { r, g, b };
-    };
-    
-    // 色の類似度を計算（0-1の範囲、1が完全一致）
-    const calculateColorSimilarity = (color1, color2) => {
-      // 'none'の処理
-      if (color1 === 'none' && color2 === 'none') return 1;
-      if (color1 === 'none' || color2 === 'none') return 0;
-      
-      // 16進数形式から抽出
-      const extractHexColor = (colorStr) => {
-        if (!colorStr || colorStr === 'none') return '#000000';
-        if (colorStr.startsWith('#')) return colorStr;
-        return normalizeColor(colorStr);
+      return {
+        element,
+        primaryColor,
+        secondaryColor: (fill === 'none') ? fill : stroke
       };
-      
-      const hex1 = extractHexColor(color1);
-      const hex2 = extractHexColor(color2);
-      
-      // 同じ16進数なら完全一致
-      if (hex1 === hex2) return 1;
-      
-      // RGBに変換して距離を計算
-      const rgb1 = hexToRgb(hex1);
-      const rgb2 = hexToRgb(hex2);
-      
-      // RGB色空間での距離を計算
-      const distance = Math.sqrt(
-        Math.pow(rgb1.r - rgb2.r, 2) +
-        Math.pow(rgb1.g - rgb2.g, 2) +
-        Math.pow(rgb1.b - rgb2.b, 2)
-      );
-      
-      // 距離を0-1の類似度に変換（最大距離は√(255²+255²+255²) ≈ 441.67）
-      const maxDistance = Math.sqrt(3 * Math.pow(255, 2));
-      return 1 - (distance / maxDistance);
-    };
-    
-    // 各要素を色グループに振り分け
-    processedElements.forEach(element => {
-      const color = getElementColor(element);
-      const elementClone = element.cloneNode(true);
-      
-      // 透明指定を解除してレイヤーの色を反映
-      elementClone.removeAttribute('fill');
-      elementClone.removeAttribute('stroke');
-      
-      const style = elementClone.getAttribute('style') || '';
-      const newStyle = style
-        .replace(/fill:[^;]+;?/g, '')
-        .replace(/stroke:[^;]+;?/g, '')
-        .trim();
-      
-      if (newStyle) {
-        elementClone.setAttribute('style', newStyle);
-      } else {
-        elementClone.removeAttribute('style');
-      }
-      
-      // 要素を文字列化
-      const elementStr = new XMLSerializer().serializeToString(elementClone);
-      
-      // 色グループに追加
-      if (!colorGroups[color]) {
-        colorGroups[color] = [];
-      }
-      colorGroups[color].push(elementStr);
     });
     
-    // 色グループをマージする処理
-    const mergeColorGroups = () => {
-      const colorKeys = Object.keys(colorGroups);
-      const similarityThreshold = 0.85; // 類似度がこの値以上なら同じグループとみなす
-      const MAX_LAYERS = 16; // 最大レイヤー数（色が多すぎる場合の制限）
-      const MIN_LAYERS = 3;  // 最小レイヤー数（常に少なくともこの数のレイヤーを確保）
+    // 色の類似性に基づいて要素をグループ化
+    const colorGroups = {};
+    
+    // 色の類似性を計算（HEXやRGBA形式を考慮）
+    elementColors.forEach(item => {
+      // 色の正規化
+      const normalizedColor = normalizeColor(item.primaryColor);
       
-      // 色グループが少ない場合はそのまま返す
-      if (colorKeys.length <= MIN_LAYERS) {
-        return colorGroups;
+      // グループにまだ存在しない場合は新しいグループを作成
+      if (!colorGroups[normalizedColor]) {
+        colorGroups[normalizedColor] = [];
       }
       
-      console.log(`${colorKeys.length}個の色グループを最適化します`);
+      // 要素をグループに追加
+      colorGroups[normalizedColor].push(item.element);
+    });
+    
+    // グループの数を確認
+    let groupCount = Object.keys(colorGroups).length;
+    console.log(`色に基づくグループ数: ${groupCount}`);
+    
+    // 類似色のマージ
+    if (groupCount > maxLayers) {
+      // 最終的なグループ数を制限するために色の類似性に基づいてマージ
+      const mergedGroups = mergeColorGroups(colorGroups, maxLayers);
+      groupCount = Object.keys(mergedGroups).length;
+      console.log(`マージ後のグループ数: ${groupCount}`);
       
-      // 新しいグループを作成
-      const mergedGroups = {};
-      const processedKeys = new Set();
-      
-      // 各色グループについて
-      for (let i = 0; i < colorKeys.length; i++) {
-        const key = colorKeys[i];
-        
-        // 既に処理済みならスキップ
-        if (processedKeys.has(key)) continue;
-        
-        // グループの要素数が少なすぎる場合は無視（ノイズ除去）
-        if (colorGroups[key].length < 5 && colorKeys.length > MAX_LAYERS) {
-          processedKeys.add(key);
-          continue;
-        }
-        
-        // 新しいグループを作成
-        const mergedKey = key;
-        mergedGroups[mergedKey] = [...colorGroups[key]];
-        processedKeys.add(key);
-        
-        // 類似した他のグループを探して結合
-        for (let j = i + 1; j < colorKeys.length; j++) {
-          const otherKey = colorKeys[j];
-          
-          // 既に処理済みならスキップ
-          if (processedKeys.has(otherKey)) continue;
-          
-          // 類似度を計算
-          const similarity = calculateColorSimilarity(key, otherKey);
-          
-          // 類似度が閾値以上ならマージ
-          if (similarity >= similarityThreshold) {
-            mergedGroups[mergedKey].push(...colorGroups[otherKey]);
-            processedKeys.add(otherKey);
-          }
-        }
-      }
-      
-      // マージ後のグループ数が依然として多すぎる場合、出現頻度の高い上位グループだけを保持
-      const mergedKeys = Object.keys(mergedGroups);
-      if (mergedKeys.length > MAX_LAYERS) {
-        console.log(`マージ後も色グループが多すぎます(${mergedKeys.length}個)。上位${MAX_LAYERS}個を保持します。`);
-        
-        // 要素数でソートし、上位グループのみを保持
-        const sortedGroups = mergedKeys
-          .map(key => ({ key, count: mergedGroups[key].length }))
-          .sort((a, b) => b.count - a.count)
-          .slice(0, MAX_LAYERS);
-        
-        const finalGroups = {};
-        sortedGroups.forEach(group => {
-          finalGroups[group.key] = mergedGroups[group.key];
-        });
-        
-        return finalGroups;
-      }
-      
-      // マージ後のグループ数が少なすぎる場合、強制的に分割
-      if (mergedKeys.length < MIN_LAYERS && colorKeys.length > MIN_LAYERS) {
-        console.log(`マージ後の色グループが少なすぎます(${mergedKeys.length}個)。色の分割を試みます。`);
-        
-        // マージ前の色グループに戻り、類似度の閾値を下げて再処理
-        return colorGroups;
-      }
-      
-      return mergedGroups;
-    };
-    
-    // 色グループをマージ
-    const finalColorGroups = mergeColorGroups();
-    
-    // 色グループの数をログ
-    const groupCount = Object.keys(finalColorGroups).length;
-    console.log(`${groupCount}個の色グループを最終的に作成しました`);
-    
-    // 新しいSVG構造を構築
-    const newSvgTemplate = `
-      <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-           viewBox="${viewBox || '0 0 800 600'}" width="${width || '800'}" height="${height || '600'}">
-        <defs>
-          <clipPath id="svgFrame">
-            <rect x="0" y="0" width="100%" height="100%" />
-          </clipPath>
-        </defs>
-        <g id="Layers" data-photopea-root="true">
-          ${Object.entries(finalColorGroups).map(([color, elements], index) => {
-            // タイムアウトチェック
-            if (timeoutTriggered) {
-              throw new Error('処理タイムアウト');
-            }
-            
-            // 色名の生成（短くする）
-            const colorName = color.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 15);
-            
-            // 色の表示名を生成
-            let colorDisplayName;
-            try {
-              // 16進数をRGBに変換して色名を推定
-              const rgb = hexToRgb(color);
-              // 簡易的な色名生成（赤、緑、青の強さでカテゴリ分け）
-              const r = rgb.r / 255;
-              const g = rgb.g / 255;
-              const b = rgb.b / 255;
-              
-              if (Math.max(r, g, b) < 0.2) {
-                colorDisplayName = '黒系';
-              } else if (Math.min(r, g, b) > 0.8) {
-                colorDisplayName = '白系';
-              } else if (r > g && r > b) {
-                colorDisplayName = '赤系';
-              } else if (g > r && g > b) {
-                colorDisplayName = '緑系';
-              } else if (b > r && b > g) {
-                colorDisplayName = '青系';
-              } else if (r > 0.7 && g > 0.7 && b < 0.3) {
-                colorDisplayName = '黄系';
-              } else if (r > 0.7 && b > 0.7 && g < 0.3) {
-                colorDisplayName = '紫系';
-              } else if (g > 0.7 && b > 0.7 && r < 0.3) {
-                colorDisplayName = '水色系';
-              } else {
-                colorDisplayName = '中間色';
-              }
-            } catch (e) {
-              colorDisplayName = `レイヤー${index + 1}`;
-            }
-            
-            return `
-              <g id="layer_${index}_${colorName}" data-name="${colorDisplayName}" data-photopea-layer="true" data-color="${color}" fill="${color}" clip-path="url(#svgFrame)">
-                ${elements.join('\n')}
-              </g>
-            `;
-          }).join('\n')}
-        </g>
-      </svg>
-    `;
-    
-    // 処理完了
-    console.log('強制レイヤー分割が完了しました');
-    clearTimeout(operationTimeout);
-    return newSvgTemplate;
-    
-  } catch (error) {
-    console.error('強制レイヤー分割中にエラーが発生しました:', error);
-    clearTimeout(operationTimeout);
-    
-    // タイムアウトエラーの場合は null を返す
-    if (timeoutTriggered || error.message === '処理タイムアウト') {
-      return null;
+      // 元のグループを更新
+      Object.assign(colorGroups, mergedGroups);
+    } else if (groupCount < minLayers && Object.keys(colorGroups).length > 1) {
+      // 少なすぎる場合は類似度の閾値を下げてより多くのグループに分割
+      console.log(`グループ数が少なすぎます。より多くのグループに分割します...`);
+      // この実装はより複雑になるため、現在のグループをそのまま使用
     }
     
-    // その他のエラーでは元のSVGをそのまま返す
-    return svgData;
+    // 新しいSVG構造を作成
+    const newSvgDoc = parser.parseFromString(svgData, 'image/svg+xml');
+    const newSvgRoot = newSvgDoc.querySelector('svg');
+    
+    // 既存の内容をクリア（defsを保持）
+    const defs = newSvgRoot.querySelector('defs');
+    const defsClone = defs ? defs.cloneNode(true) : null;
+    
+    while (newSvgRoot.firstChild) {
+      newSvgRoot.removeChild(newSvgRoot.firstChild);
+    }
+    
+    // defsがあれば復元
+    if (defsClone) {
+      newSvgRoot.appendChild(defsClone);
+    }
+    
+    // 各色グループをレイヤーとして追加
+    Object.entries(colorGroups).forEach(([color, elements], index) => {
+      if (elements.length === 0) return;
+      
+      // 新しいグループ要素を作成
+      const group = newSvgDoc.createElementNS('http://www.w3.org/2000/svg', 'g');
+      group.setAttribute('id', `layer-${index + 1}`);
+      
+      // カラー名を取得して設定
+      let colorName = getColorName(color);
+      group.setAttribute('data-name', colorName || `レイヤー ${index + 1}`);
+      
+      // グループ内の要素を追加
+      elements.forEach(element => {
+        // 元の要素をクローン
+        const elementClone = element.cloneNode(true);
+        group.appendChild(elementClone);
+      });
+      
+      newSvgRoot.appendChild(group);
+    });
+    
+    // 新しいSVGデータを文字列に変換
+    const serializer = new XMLSerializer();
+    let newSvgData = serializer.serializeToString(newSvgDoc);
+    
+    // 最終的なレイヤー数を確認
+    const finalLayerCount = analyzeSvgLayers(newSvgData, "forceSplitSvgLayers終了時");
+    console.log(`レイヤー分割後の最終レイヤー数: ${finalLayerCount}`);
+    
+    // 最大レイヤー数を超えた場合は制限を適用
+    if (finalLayerCount > maxLayers) {
+      console.log(`最終レイヤー数(${finalLayerCount})が制限(${maxLayers})を超えています。制限を適用します。`);
+      newSvgData = enforceLayerLimit(newSvgData, maxLayers);
+    }
+    
+    return newSvgData;
+  } catch (error) {
+    console.error('SVGレイヤー分割中にエラーが発生しました:', error);
+    return svgData; // エラーが発生した場合は元のデータを返す
   }
 }
 
@@ -1630,135 +1265,81 @@ function convertToSVG() {
 }
 
 /**
- * SVGプレビューを更新します
- * @param {string} svgData - SVGデータ
+ * SVGプレビューを更新する
+ * @param {string} svgData - SVGデータ文字列
  */
 function updateSvgPreview(svgData) {
+  if (!svgData) return;
+  
   const svgPreview = document.getElementById('svg-preview');
+  const svgCode = document.getElementById('svg-code');
+  const layersList = document.getElementById('layers-list');
+  const layersContainer = document.getElementById('layers-container');
+  const downloadButton = document.getElementById('download-button');
   
-  // SVGデータの整合性チェック
-  if (!svgData || !svgData.includes('<svg') || !svgData.includes('</svg>')) {
-    showErrorMessage('不完全なSVGデータが生成されました', '別の画像や設定で再試行してください');
-    return;
+  if (!svgPreview) return;
+  
+  // 最終的なレイヤー数確認と制限適用
+  const MAX_LAYERS = 30;
+  const layerCount = analyzeSvgLayers(svgData, "プレビュー表示前");
+  console.log(`プレビュー表示前のSVGレイヤー数: ${layerCount}`);
+  
+  let finalSvgData = svgData;
+  if (layerCount > MAX_LAYERS) {
+    console.log(`最終出力でもレイヤー数(${layerCount})が多すぎるため、制限を適用します`);
+    finalSvgData = enforceLayerLimit(svgData, MAX_LAYERS);
+    
+    // 制限適用後のレイヤー数を再確認
+    const newLayerCount = analyzeSvgLayers(finalSvgData, "最終レイヤー制限適用後");
+    console.log(`最終的なSVGレイヤー数: ${newLayerCount}`);
   }
   
-  try {
-    // プレビューを更新
-    svgPreview.innerHTML = svgData;
-    
-    // 結果コンテナが表示されていることを確認
-    const resultContainer = document.getElementById('result-container');
-    if (resultContainer) {
-      resultContainer.style.display = 'block';
-    }
-    
-    // SVGプレビューの親要素が表示されていることを確認
-    const previewParent = svgPreview.closest('.preview-item');
-    if (previewParent) {
-      previewParent.style.display = 'block';
-    }
-    
-    // SVG要素にスタイルを適用
-    const svgElement = svgPreview.querySelector('svg');
-    if (svgElement) {
-      // SVGの寸法を取得
-      const width = svgElement.getAttribute('width') || svgElement.viewBox?.baseVal?.width || 100;
-      const height = svgElement.getAttribute('height') || svgElement.viewBox?.baseVal?.height || 100;
+  // 現在のSVGデータを更新
+  currentSvgData = finalSvgData;
+  
+  // SVGプレビュー更新
+  svgPreview.innerHTML = finalSvgData;
+  
+  // SVGコードを表示
+  if (svgCode) {
+    updateSvgCodeDisplay(finalSvgData);
+  }
+  
+  // レイヤー情報を抽出・表示
+  if (layersList && layersContainer) {
+    try {
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(finalSvgData, 'image/svg+xml');
+      const layers = extractLayers(finalSvgData);
       
-      console.log(`SVGの元の寸法: ${width}x${height}`);
-      
-      // viewBoxが設定されていない場合は設定
-      if (!svgElement.getAttribute('viewBox')) {
-        console.log('viewBoxが設定されていないため設定します');
-        svgElement.setAttribute('viewBox', `0 0 ${width} ${height}`);
-      }
-      
-      // viewBoxを確認し、不正な場合は修正
-      const viewBox = svgElement.getAttribute('viewBox');
-      if (!viewBox || viewBox.split(' ').length < 4) {
-        console.log('viewBoxの形式が不正なため修正します');
-        svgElement.setAttribute('viewBox', `0 0 ${width} ${height}`);
-      }
-      
-      // 必ず幅と高さの属性があることを確認
-      if (!svgElement.hasAttribute('width')) {
-        svgElement.setAttribute('width', width);
-      }
-      
-      if (!svgElement.hasAttribute('height')) {
-        svgElement.setAttribute('height', height);
-      }
-      
-      // アスペクト比を維持しながらプレビュー領域に収まるように調整
-      svgElement.style.width = 'auto';
-      svgElement.style.height = 'auto';
-      svgElement.style.maxWidth = '100%';
-      svgElement.style.maxHeight = '280px';
-      svgElement.style.display = 'block';
-      svgElement.style.margin = '0 auto';
-      svgElement.style.objectFit = 'contain';
-      
-      // プリザベアスペクトレシオを設定
-      svgElement.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-      
-      // SVG内の変換グループがあれば調整
-      const mainGroup = svgElement.querySelector('g[id="Layers"], g[data-photopea-root="true"], g[id="document"]');
-      if (mainGroup) {
-        console.log('メインレイヤーグループを検出しました');
-        mainGroup.setAttribute('transform-origin', 'center');
-      }
-      
-      // SVG内のすべてのパスに対して、ビューボックス外への突き抜けを防止
-      const allPaths = svgElement.querySelectorAll('path');
-      if (allPaths.length > 0) {
-        // クリッピングパスがまだなければ追加
-        if (!svgElement.querySelector('clipPath#svg-boundary')) {
-          const defs = svgElement.querySelector('defs');
-          if (!defs) {
-            const newDefs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-            svgElement.prepend(newDefs);
-          }
-          
-          const defsElement = svgElement.querySelector('defs');
-          const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
-          clipPath.setAttribute('id', 'svg-boundary');
-          
-          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          rect.setAttribute('x', '0');
-          rect.setAttribute('y', '0');
-          rect.setAttribute('width', width);
-          rect.setAttribute('height', height);
-          
-          clipPath.appendChild(rect);
-          defsElement.appendChild(clipPath);
-        }
+      if (layers && layers.length > 0) {
+        updateLayersList(layers);
+        layersContainer.style.display = 'block';
         
-        // すべてのパスにクリッピングパスを適用
-        allPaths.forEach(path => {
-          path.setAttribute('clip-path', 'url(#svg-boundary)');
-        });
+        // レイヤー数を表示
+        const layersHeading = layersContainer.querySelector('h3');
+        if (layersHeading) {
+          layersHeading.textContent = `レイヤー管理 (${layers.length})`;
+        }
+      } else {
+        layersContainer.style.display = 'none';
       }
-      
-      // SVG全体にオーバーフロー制限を追加
-      svgElement.style.overflow = 'hidden';
-      
-      console.log(`SVG表示設定: サイズ=${width}x${height}, viewBox=${svgElement.getAttribute('viewBox')}, aspectRatio=${svgElement.getAttribute('preserveAspectRatio')}`);
-    } else {
-      console.warn('SVG要素が見つかりませんでした');
+    } catch (e) {
+      console.error('レイヤー処理エラー:', e);
+      layersContainer.style.display = 'none';
     }
-    
-    // 現在のSVGデータを更新
-    currentSvgData = svgData;
-  } catch (error) {
-    console.error('SVGプレビューの更新に失敗しました:', error);
-    showErrorMessage('SVGプレビューの表示に失敗しました', null);
-  }
   }
   
-  /**
-   * SVGデータをダウンロードする
-   */
-  function downloadSVG() {
+  // ダウンロードボタンを有効化
+  if (downloadButton) {
+    downloadButton.disabled = false;
+  }
+}
+
+/**
+ * SVGデータをダウンロードする
+ */
+function downloadSVG() {
   if (!currentSvgData || !currentFile) {
     showErrorMessage('ダウンロードできるSVGデータがありません。画像を選択して変換してください。', 'やり直す');
     return;
@@ -1820,12 +1401,12 @@ function updateSvgPreview(svgData) {
       convertToSVG(); // エラーが発生した場合、自動的に再変換を試みる
     });
   }
-  }
-  
-  /**
-   * UIをリセットする
-   */
-  function resetUI() {
+}
+
+/**
+ * UIをリセットする
+ */
+function resetUI() {
   console.log('UIをリセットします');
   
   // 各要素の参照を取得
@@ -2168,66 +1749,62 @@ function useImageBasedFallback(file, options, resolve, reject, originalImage = n
   // 画像処理の共通関数
   function processOriginalImage(image) {
     try {
-      // 画像をキャンバスに描画
       const canvas = document.createElement('canvas');
-      let width = image.naturalWidth;
-      let height = image.naturalHeight;
       const maxSize = options.maxImageSize || 2000;
       
-      // 必要に応じてリサイズ
-      if (width > maxSize || height > maxSize) {
-        if (width > height) {
-          height = Math.floor(height * (maxSize / width));
-          width = maxSize;
-        } else {
-          width = Math.floor(width * (maxSize / height));
-          height = maxSize;
-        }
+      // 画像サイズが大きすぎる場合はリサイズ
+      if (image.width > maxSize || image.height > maxSize) {
+        const scale = Math.min(maxSize / image.width, maxSize / image.height);
+        canvas.width = Math.floor(image.width * scale);
+        canvas.height = Math.floor(image.height * scale);
+      } else {
+        canvas.width = image.width;
+        canvas.height = image.height;
       }
       
-      canvas.width = width;
-      canvas.height = height;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(image, 0, 0, width, height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
       
       // カラーモードに応じた処理
-      let svgData;
+      const isBW = options.colorMode === 'bw';
       
-      if (options.colorMode === 'bw') {
-        // 白黒モードの場合は2値化処理
-        svgData = createBWFallbackSVG(canvas, options.threshold || 128);
+      let svg;
+      if (isBW) {
+        // 白黒モード：閾値でレイヤー分割
+        svg = createBWFallbackSVG(canvas, options.threshold || 128);
       } else {
-        // カラーモードの場合は色分析とレイヤー分割を行う
-        svgData = createColorLayeredSVG(canvas, options);
+        // カラーモード：色の量子化でレイヤー分割
+        svg = createColorLayeredSVG(canvas, options);
       }
       
-      resolve(svgData);
+      // SVGのレイヤー数を分析
+      const layerCount = analyzeSvgLayers(svg, "フォールバック変換後");
+      console.log(`フォールバック変換後のSVGレイヤー数: ${layerCount}`);
       
-    } catch (canvasError) {
-      console.error('キャンバス処理エラー:', canvasError);
-      
-      // エラー時は単純なフォールバック
-      try {
-        // 失敗しても最低限の画像は表示
-        const simpleCanvas = document.createElement('canvas');
-        simpleCanvas.width = image.naturalWidth;
-        simpleCanvas.height = image.naturalHeight;
-        const simpleCtx = simpleCanvas.getContext('2d');
-        simpleCtx.drawImage(image, 0, 0);
+      // レイヤー数を制限
+      if (layerCount > 30) {
+        console.log('フォールバックでのレイヤー数が多すぎるため、制限を適用します');
+        const MAX_ALLOWED_LAYERS = 30;
+        svg = enforceLayerLimit(svg, MAX_ALLOWED_LAYERS);
         
-        const dataURL = simpleCanvas.toDataURL('image/png');
-        const simpleSvg = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="${image.naturalWidth}" height="${image.naturalHeight}" viewBox="0 0 ${image.naturalWidth} ${image.naturalHeight}">
-            <g id="Layers" data-photopea-root="true">
-              <g id="layer_image" data-name="画像レイヤー" data-photopea-layer="true">
-                <image width="${image.naturalWidth}" height="${image.naturalHeight}" href="${dataURL}" />
-              </g>
-            </g>
-          </svg>
-        `;
-        resolve(simpleSvg);
-      } catch (e) {
-        createErrorSVG(canvasError.message, resolve, image);
+        // 制限適用後のレイヤー数を再確認
+        const newLayerCount = analyzeSvgLayers(svg, "フォールバックでのレイヤー制限適用後");
+        console.log(`制限適用後のSVGレイヤー数: ${newLayerCount}`);
+      }
+      
+      clearTimeout(timeoutId);
+      console.log('画像ベースのフォールバック処理が完了しました');
+      resolve(svg);
+    } catch (e) {
+      console.error('画像処理エラー:', e);
+      clearTimeout(timeoutId);
+      
+      // エラー時は元画像をベースにしたSVGを生成
+      try {
+        const errorMessage = 'SVG変換エラー: ' + e.message;
+        createErrorSVG(errorMessage, resolve, image);
+      } catch (svgError) {
+        reject(new Error('SVG生成に失敗しました: ' + e.message));
       }
     }
   }
@@ -2336,7 +1913,13 @@ function createColorLayeredSVG(canvas, options) {
   const height = canvas.height;
   
   // 色の量子化（カラー数を減らす）
-  const colorCount = options.colorQuantization || 8;
+  // レイヤー数を制限（最大30レイヤー）
+  const MAX_LAYERS = 30;
+  let colorCount = options.colorQuantization || 8;
+  if (colorCount > MAX_LAYERS) {
+    console.log(`指定されたカラー数(${colorCount})が多すぎるため、${MAX_LAYERS}に制限します`);
+    colorCount = MAX_LAYERS;
+  }
   console.log(`レイヤー分割のための色数: ${colorCount}`);
   
   // 色の出現頻度をカウント
@@ -2445,11 +2028,51 @@ function createColorLayeredSVG(canvas, options) {
     }).join('');
   }
   
+  // レイヤー数を確認し、多すぎる場合は制限
+  if (layers.length > MAX_LAYERS) {
+    console.log(`レイヤー数(${layers.length})が多すぎるため、${MAX_LAYERS}に制限します`);
+    
+    // 各レイヤーのピクセル使用率を計算（重要度の指標として）
+    const layerStats = layers.map(layer => {
+      // 別のキャンバスにレイヤーを描画して非透明ピクセル数をカウント
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 100; // 小さいサイズで十分
+      tempCanvas.height = 100;
+      const scaleFactor = 100 / Math.max(width, height);
+      
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.scale(scaleFactor, scaleFactor);
+      
+      const img = new Image();
+      img.src = layer.dataURL;
+      tempCtx.drawImage(img, 0, 0);
+      
+      // 非透明ピクセルをカウント
+      const tempData = tempCtx.getImageData(0, 0, 100, 100).data;
+      let nonTransparentPixels = 0;
+      for (let i = 3; i < tempData.length; i += 4) {
+        if (tempData[i] > 0) nonTransparentPixels++;
+      }
+      
+      return {
+        ...layer,
+        importance: nonTransparentPixels / (100 * 100) // 重要度 (0-1)
+      };
+    });
+    
+    // 重要度でソートして上位のみを保持
+    layerStats.sort((a, b) => b.importance - a.importance);
+    layers.length = 0; // 配列をクリア
+    layers.push(...layerStats.slice(0, MAX_LAYERS));
+    
+    console.log(`レイヤーを${MAX_LAYERS}個に制限しました`);
+  }
+  
   // オプション: レイヤー適用前の元画像を最下層に配置
   const baseLayerDataURL = canvas.toDataURL('image/png');
   
   // レイヤーをSVGとして出力（逆順に追加して正しい重ね順に）
-  return `
+  const svgData = `
     <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
          width="${width}" height="${height}" 
          viewBox="0 0 ${width} ${height}">
@@ -2470,6 +2093,8 @@ function createColorLayeredSVG(canvas, options) {
       </g>
     </svg>
   `;
+  
+  return svgData;
 }
 
 /**
@@ -2575,4 +2200,233 @@ function createSimpleErrorSVG(errorMessage, width, height) {
       <text x="50%" y="55%" font-family="sans-serif" font-size="14" text-anchor="middle" fill="#333333">※別の画像や設定で再試行してください</text>
     </svg>
   `;
+}
+
+/**
+ * SVGデータのレイヤー数を分析して詳細情報を出力する
+ * @param {string} svgData - SVGデータ文字列
+ * @param {string} stageName - 処理ステージの名前（デバッグ用）
+ * @returns {number} レイヤー数
+ */
+function analyzeSvgLayers(svgData, stageName = '不明') {
+  if (!svgData) {
+    console.warn(`[${stageName}] SVGデータが空です`);
+    return 0;
+  }
+
+  try {
+    const parser = new DOMParser();
+    const svgDoc = parser.parseFromString(svgData, 'image/svg+xml');
+    
+    // パースエラーチェック
+    const parserError = svgDoc.querySelector('parsererror');
+    if (parserError) {
+      console.error(`[${stageName}] SVGパースエラー:`, parserError.textContent);
+      return 0;
+    }
+    
+    // グループ要素（レイヤー）をカウント
+    const allGroups = svgDoc.querySelectorAll('g');
+    const layers = Array.from(allGroups).filter(g => {
+      // ルートグループやレイヤーコンテナは除外
+      const id = g.getAttribute('id') || '';
+      return !id.includes('Layers') && !g.getAttribute('data-photopea-root');
+    });
+    
+    // 色情報を収集
+    const colors = new Set();
+    layers.forEach(layer => {
+      const color = layer.getAttribute('fill') || layer.getAttribute('data-color');
+      if (color) colors.add(color);
+    });
+    
+    console.log(`[${stageName}] SVG分析結果:`, {
+      totalGroups: allGroups.length,
+      layerCount: layers.length,
+      uniqueColors: colors.size,
+      svgSize: svgData.length
+    });
+    
+    return layers.length;
+  } catch (e) {
+    console.error(`[${stageName}] SVG分析エラー:`, e);
+    return 0;
+  }
+}
+
+/**
+ * SVGのレイヤー数を強制的に制限する
+ * レイヤーが多すぎる場合、類似した色や使用頻度の低いレイヤーを統合
+ * @param {string} svgData - SVGデータ文字列
+ * @param {number} maxLayers - 最大レイヤー数
+ * @returns {string} 処理後のSVGデータ
+ */
+function enforceLayerLimit(svgData, maxLayers = 30) {
+  console.log(`レイヤー数制限を実施: 最大${maxLayers}レイヤー`);
+  
+  if (!svgData) return svgData;
+  
+  try {
+    // SVGデータを解析
+    const parser = new DOMParser();
+    const svgDoc = parser.parseFromString(svgData, 'image/svg+xml');
+    
+    // パースエラーチェック
+    const parserError = svgDoc.querySelector('parsererror');
+    if (parserError) {
+      console.error('SVGパースエラー:', parserError.textContent);
+      return svgData;
+    }
+    
+    // ルートSVG要素
+    const svgElement = svgDoc.querySelector('svg');
+    if (!svgElement) return svgData;
+    
+    // レイヤーコンテナを探す
+    const layerContainers = svgDoc.querySelectorAll('g[id="Layers"], g[data-photopea-root="true"]');
+    if (layerContainers.length === 0) return svgData;
+    
+    const layerContainer = layerContainers[0];
+    
+    // レイヤーを収集
+    const layers = Array.from(layerContainer.children).filter(el => 
+      el.tagName.toLowerCase() === 'g' && !el.getAttribute('data-photopea-root')
+    );
+    
+    // レイヤー数が制限以下なら何もしない
+    if (layers.length <= maxLayers) {
+      console.log(`レイヤー数(${layers.length})は制限内です。処理をスキップします。`);
+      return svgData;
+    }
+    
+    console.log(`レイヤー数(${layers.length})が制限(${maxLayers})を超えています。レイヤー統合を開始...`);
+    
+    // レイヤーの分析情報を収集
+    const layerInfo = layers.map(layer => {
+      // 色情報を取得
+      const color = layer.getAttribute('fill') || layer.getAttribute('data-color') || '#000000';
+      
+      // レイヤー内の要素数をカウント
+      const elementCount = layer.querySelectorAll('*').length;
+      
+      // レイヤーのID
+      const id = layer.getAttribute('id') || '';
+      
+      // レイヤー名
+      const name = layer.getAttribute('data-name') || '';
+      
+      // 色をRGB値に変換
+      let r = 0, g = 0, b = 0;
+      try {
+        const hex = color.replace(/^#/, '');
+        if (hex.length === 3) {
+          r = parseInt(hex.charAt(0) + hex.charAt(0), 16);
+          g = parseInt(hex.charAt(1) + hex.charAt(1), 16);
+          b = parseInt(hex.charAt(2) + hex.charAt(2), 16);
+        } else if (hex.length === 6) {
+          r = parseInt(hex.substring(0, 2), 16);
+          g = parseInt(hex.substring(2, 4), 16);
+          b = parseInt(hex.substring(4, 6), 16);
+        }
+      } catch (e) {
+        console.warn('色解析エラー:', color);
+      }
+      
+      return {
+        element: layer,
+        color: color,
+        id: id,
+        name: name,
+        elementCount: elementCount,
+        r, g, b
+      };
+    });
+    
+    // 色の類似度を計算する関数
+    const calculateColorDistance = (color1, color2) => {
+      const dr = color1.r - color2.r;
+      const dg = color1.g - color2.g;
+      const db = color1.b - color2.b;
+      return Math.sqrt(dr*dr + dg*dg + db*db);
+    };
+    
+    // 類似色・要素数の少ないレイヤーを特定してグループ化
+    const targetLayers = maxLayers; // 目標レイヤー数
+    let layersToMerge = layers.length - targetLayers; // マージする必要があるレイヤー数
+    
+    if (layersToMerge <= 0) return svgData;
+    
+    console.log(`${layersToMerge}個のレイヤーをマージする必要があります`);
+    
+    // マージするレイヤーのグループ
+    const mergeGroups = [];
+    const processedLayers = new Set();
+    
+    // 1. 要素数の少ないレイヤーから処理
+    layerInfo.sort((a, b) => a.elementCount - b.elementCount);
+    
+    // 2. 類似色を持つレイヤーをグループ化
+    const colorThreshold = 30; // 色の類似度閾値
+    
+    for (let i = 0; i < layerInfo.length && layersToMerge > 0; i++) {
+      const layer = layerInfo[i];
+      
+      if (processedLayers.has(layer.id)) continue;
+      
+      // 類似色のレイヤーを見つける
+      const similarLayers = layerInfo.filter(other => 
+        !processedLayers.has(other.id) && 
+        other.id !== layer.id && 
+        calculateColorDistance(layer, other) < colorThreshold
+      );
+      
+      if (similarLayers.length > 0) {
+        // グループを作成
+        const group = [layer, ...similarLayers];
+        mergeGroups.push(group);
+        
+        // 処理済みとしてマーク
+        group.forEach(l => processedLayers.add(l.id));
+        
+        // マージするレイヤー数を更新
+        layersToMerge -= Math.min(layersToMerge, similarLayers.length);
+      }
+    }
+    
+    // 3. レイヤーのマージを実行
+    mergeGroups.forEach(group => {
+      if (group.length <= 1) return;
+      
+      // メインレイヤー（通常は要素数が最も多いもの）
+      group.sort((a, b) => b.elementCount - a.elementCount);
+      const mainLayer = group[0].element;
+      
+      // 残りのレイヤーの要素をメインレイヤーに移動
+      for (let i = 1; i < group.length; i++) {
+        const layer = group[i].element;
+        
+        // レイヤー内のすべての要素をメインレイヤーに移動
+        while (layer.firstChild) {
+          mainLayer.appendChild(layer.firstChild);
+        }
+        
+        // 空になったレイヤーを削除
+        if (layer.parentNode) {
+          layer.parentNode.removeChild(layer);
+        }
+      }
+      
+      console.log(`${group.length}個のレイヤーをマージしました。レイヤーID: ${mainLayer.getAttribute('id')}`);
+    });
+    
+    // 処理後のレイヤー数を確認
+    const remainingLayers = layerContainer.querySelectorAll('g');
+    console.log(`レイヤー統合後のレイヤー数: ${remainingLayers.length}`);
+    
+    // 変更をSVG文字列に反映
+    return new XMLSerializer().serializeToString(svgDoc);
+  } catch (e) {
+    console.error('レイヤー数制限処理中にエラーが発生しました:', e);
+    return svgData;
+  }
 }

@@ -119,7 +119,7 @@ window.ImageTracer = (function() {
     // 画像処理オプション
     threshold: 128,          // 白黒モード用の閾値
     colorMode: 'color',      // 'color' または 'bw'
-    colorQuantization: 16,   // カラーモードの色数
+    colorQuantization: 30,   // カラーモードの色数（最大30に設定）
     blurRadius: 0,           // ぼかし効果の強さ
     simplify: 0.5,           // SVGパスの単純化レベル
     scale: 1,                // 出力スケール
