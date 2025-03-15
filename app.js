@@ -41,6 +41,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const simplifyRange = document.getElementById('simplify-range');
   const simplifyValue = document.getElementById('simplify-value');
   
+  // 新しい設定要素を取得
+  const colorQuantizationRange = document.getElementById('color-quantization-range');
+  const colorQuantizationValue = document.getElementById('color-quantization-value');
+  const blurRadiusRange = document.getElementById('blur-radius-range');
+  const blurRadiusValue = document.getElementById('blur-radius-value');
+  const strokeWidthRange = document.getElementById('stroke-width-range');
+  const strokeWidthValue = document.getElementById('stroke-width-value');
+  
   // 現在のファイルとSVGデータの保存用変数
   let currentFile = null;
   let currentSvgData = null;
@@ -188,6 +196,29 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateSettings() {
     thresholdValue.textContent = thresholdRange.value;
     simplifyValue.textContent = simplifyRange.value;
+    
+    // カラーモードによる閾値設定の表示/非表示
+    const isBW = colorMode.value === 'bw';
+    document.querySelector('.threshold-container').style.display = isBW ? 'block' : 'none';
+    
+    // 新しい設定の更新
+    if (colorQuantizationRange && colorQuantizationValue) {
+      colorQuantizationValue.textContent = colorQuantizationRange.value;
+      // カラーモードの場合のみ色量子化設定を表示
+      document.querySelector('.color-quantization-container').style.display = 
+        colorMode.value === 'color' ? 'block' : 'none';
+    }
+    
+    if (blurRadiusRange && blurRadiusValue) {
+      blurRadiusValue.textContent = blurRadiusRange.value;
+    }
+    
+    if (strokeWidthRange && strokeWidthValue) {
+      strokeWidthValue.textContent = strokeWidthRange.value;
+      // 白黒モードの場合のみストローク幅設定を表示
+      document.querySelector('.stroke-width-container').style.display = 
+        colorMode.value === 'bw' ? 'block' : 'none';
+    }
   }
   
   /**
@@ -208,6 +239,19 @@ document.addEventListener('DOMContentLoaded', () => {
       // 大きな画像のリサイズ上限を設定
       maxImageSize: 2000 // 2000px以上の画像はリサイズ
     };
+    
+    // 新しいオプションの追加
+    if (colorQuantizationRange) {
+      options.colorQuantization = parseInt(colorQuantizationRange.value);
+    }
+    
+    if (blurRadiusRange) {
+      options.blurRadius = parseFloat(blurRadiusRange.value);
+    }
+    
+    if (strokeWidthRange && colorMode.value === 'bw') {
+      options.strokeWidth = parseFloat(strokeWidthRange.value);
+    }
     
     // ダウンロードボタンを無効化
     downloadBtn.disabled = true;
@@ -375,6 +419,20 @@ document.addEventListener('DOMContentLoaded', () => {
     thresholdRange.value = 128;
     colorMode.value = 'color';
     simplifyRange.value = 0.5;
+    
+    // 新しい設定を初期値に戻す
+    if (colorQuantizationRange) {
+      colorQuantizationRange.value = 16;
+    }
+    
+    if (blurRadiusRange) {
+      blurRadiusRange.value = 0;
+    }
+    
+    if (strokeWidthRange) {
+      strokeWidthRange.value = 0;
+    }
+    
     updateSettings();
     
     console.log('UI リセット完了');
@@ -428,6 +486,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // 設定値の変更イベントリスナー
   thresholdRange.addEventListener('input', updateSettings);
   simplifyRange.addEventListener('input', updateSettings);
+  colorMode.addEventListener('change', updateSettings);
+  
+  // 新しい設定変更イベント
+  if (colorQuantizationRange) {
+    colorQuantizationRange.addEventListener('input', updateSettings);
+  }
+  
+  if (blurRadiusRange) {
+    blurRadiusRange.addEventListener('input', updateSettings);
+  }
+  
+  if (strokeWidthRange) {
+    strokeWidthRange.addEventListener('input', updateSettings);
+  }
   
   // イベントリスナーの設定
   uploadArea.addEventListener('dragover', handleDragOver);

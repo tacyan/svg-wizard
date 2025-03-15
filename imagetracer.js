@@ -12,6 +12,8 @@
  * - PNG
  * - GIF
  * - WebP
+ * 
+ * @version 2.0.0
  */
 
 const ImageTracer = {
@@ -31,10 +33,16 @@ const ImageTracer = {
         simplify: 0.5, // パスの単純化（0〜1）
         scale: 1,
         outputFormat: 'svg', // 'svg' または 'path'（パスデータのみ）
-        maxImageSize: 2000 // 処理する最大サイズ（幅または高さ）
+        maxImageSize: 2000, // 処理する最大サイズ（幅または高さ）
+        colorQuantization: 16, // カラーモードで使用する最大色数（2-256）
+        blurRadius: 0, // 前処理のブラー強度（0-5）
+        strokeWidth: 0 // SVGパスのストローク幅（0=塗りつぶし）
       };
       
       const opts = { ...defaultOptions, ...options };
+      
+      // カラー量子化の値を制限（2-256）
+      opts.colorQuantization = Math.max(2, Math.min(256, opts.colorQuantization));
       
       // 進捗コールバックがなければ空の関数を設定
       const updateProgress = progressCallback || (() => {});
@@ -67,6 +75,11 @@ const ImageTracer = {
         
         updateProgress(15);
         
+        // 前処理（オプションでブラー処理を適用）
+        if (opts.blurRadius > 0) {
+          this._applyBlur(ctx, width, height, opts.blurRadius);
+        }
+        
         // 画像データの取得
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         
@@ -94,6 +107,53 @@ const ImageTracer = {
         reject(error);
       }
     });
+  },
+  
+  /**
+   * 画像にブラーをかける前処理
+   * @param {CanvasRenderingContext2D} ctx - キャンバスコンテキスト
+   * @param {Number} width - 画像の幅
+   * @param {Number} height - 画像の高さ
+   * @param {Number} radius - ブラー半径（0-5）
+   * @private
+   */
+  _applyBlur: function(ctx, width, height, radius) {
+    // 簡易ボックスブラーの実装
+    const iterations = Math.min(3, Math.max(1, Math.floor(radius)));
+    const blurRadius = Math.min(5, Math.max(1, Math.floor(radius)));
+    
+    for (let i = 0; i < iterations; i++) {
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+      const result = new Uint8ClampedArray(data.length);
+      
+      // 水平方向のブラー
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          let r = 0, g = 0, b = 0, a = 0, count = 0;
+          
+          for (let dx = -blurRadius; dx <= blurRadius; dx++) {
+            const nx = Math.min(width - 1, Math.max(0, x + dx));
+            const i = (y * width + nx) * 4;
+            r += data[i];
+            g += data[i + 1];
+            b += data[i + 2];
+            a += data[i + 3];
+            count++;
+          }
+          
+          const resultIndex = (y * width + x) * 4;
+          result[resultIndex] = r / count;
+          result[resultIndex + 1] = g / count;
+          result[resultIndex + 2] = b / count;
+          result[resultIndex + 3] = a / count;
+        }
+      }
+      
+      // 結果をキャンバスに戻す
+      const newImageData = new ImageData(result, width, height);
+      ctx.putImageData(newImageData, 0, 0);
+    }
   },
   
   /**
@@ -152,8 +212,14 @@ const ImageTracer = {
           // SVGデータの取得
           const svgData = potrace.getSVG(1.0, options.simplify);
           
+          // ストローク幅が指定されている場合はスタイルを追加
+          let finalSvgData = svgData;
+          if (options.strokeWidth > 0) {
+            finalSvgData = this._addStrokeToSVG(svgData, options.strokeWidth);
+          }
+          
           updateProgress(100);
-          resolve(svgData);
+          resolve(finalSvgData);
         });
       } catch (error) {
         console.error('Potrace処理エラー:', error);
@@ -163,6 +229,18 @@ const ImageTracer = {
           .catch(err => reject(err));
       }
     });
+  },
+  
+  /**
+   * SVGにストロークスタイルを追加する
+   * @param {String} svgData - 元のSVGデータ
+   * @param {Number} strokeWidth - ストローク幅
+   * @returns {String} 修正されたSVG
+   * @private
+   */
+  _addStrokeToSVG: function(svgData, strokeWidth) {
+    // パス要素にストロークスタイルを追加
+    return svgData.replace(/<path/g, `<path stroke="black" stroke-width="${strokeWidth}" fill="none"`);
   },
   
   /**
@@ -236,6 +314,267 @@ const ImageTracer = {
       try {
         updateProgress(20);
         
+        // Potraceライブラリの確認
+        if (typeof window.Potrace === 'undefined' || window.potraceLoaded === false) {
+          console.warn('Potraceライブラリが利用できません。代替処理を使用します。');
+          // 代替処理として単純な画像埋め込みを使用
+          return this._createSimpleColorSVG(imageData, options, updateProgress)
+            .then(svgData => resolve(svgData));
+        }
+        
+        // 色の量子化とレイヤー分解
+        this._processWithColorQuantization(imageData, options, updateProgress)
+          .then(svgData => {
+            updateProgress(100);
+            resolve(svgData);
+          })
+          .catch(error => {
+            console.error('カラー処理エラー:', error);
+            // エラーが発生した場合は代替処理に切り替え
+            this._createSimpleColorSVG(imageData, options, updateProgress)
+              .then(svgData => resolve(svgData));
+          });
+        
+      } catch (error) {
+        console.error('カラー変換エラー:', error);
+        reject(error);
+      }
+    });
+  },
+  
+  /**
+   * 色の量子化を使用したカラー画像処理
+   * @param {ImageData} imageData - 画像データ
+   * @param {Object} options - 変換オプション
+   * @param {Function} updateProgress - 進捗更新関数
+   * @returns {Promise<String>} SVG文字列
+   * @private
+   */
+  _processWithColorQuantization: function(imageData, options, updateProgress) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        // 色の量子化（最大色数を制限）
+        updateProgress(30);
+        const { palette, indexedPixels } = this._quantizeColors(imageData, options.colorQuantization);
+        
+        updateProgress(40);
+        
+        // SVG生成用の準備
+        const width = imageData.width;
+        const height = imageData.height;
+        
+        // SVGのヘッダーを作成
+        let svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n`;
+        
+        // 各色のレイヤーを処理
+        const potrace = window.Potrace.Potrace.getInstance();
+        
+        // Potraceのパラメータ設定
+        potrace.setParameters({
+          turdSize: 2,
+          alphaMax: 1.0,
+          optCurve: true,
+          optTolerance: 0.2,
+          turnPolicy: window.Potrace.Potrace.TURNPOLICY_MINORITY
+        });
+        
+        // パレットの各色に対してレイヤーを作成
+        const totalColors = palette.length;
+        for (let colorIndex = 0; colorIndex < totalColors; colorIndex++) {
+          updateProgress(40 + (50 * colorIndex / totalColors));
+          
+          // 現在の色のマスクを作成
+          const colorMask = this._createColorMask(indexedPixels, colorIndex, width, height);
+          
+          // Potraceで処理
+          potrace.setParameters({ threshold: 128 });
+          potrace.loadImageFromInstance(colorMask, width, height);
+          
+          await new Promise(resolve => {
+            potrace.process(() => {
+              resolve();
+            });
+          });
+          
+          // 色のRGBを16進数表現に変換
+          const color = palette[colorIndex];
+          const hexColor = this._rgbToHex(color[0], color[1], color[2]);
+          
+          // この色のパスを取得してSVGに追加
+          const pathData = potrace.getPathTag(options.simplify, { fill: hexColor, "fill-opacity": 1.0 });
+          svgData += pathData + "\n";
+        }
+        
+        // SVGを閉じる
+        svgData += "</svg>";
+        
+        updateProgress(95);
+        resolve(svgData);
+        
+      } catch (error) {
+        console.error('色量子化処理エラー:', error);
+        reject(error);
+      }
+    });
+  },
+  
+  /**
+   * 色の量子化を行う
+   * @param {ImageData} imageData - 画像データ
+   * @param {Number} maxColors - 最大色数
+   * @returns {Object} パレットとインデックス付きピクセル
+   * @private
+   */
+  _quantizeColors: function(imageData, maxColors) {
+    // メディアンカット法による簡易的な色の量子化
+
+    // 画像データをRGBの配列に変換
+    const pixels = [];
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      pixels.push([data[i], data[i + 1], data[i + 2]]);
+    }
+    
+    // 色空間を分割するための再帰関数
+    const splitColorSpace = (pixels, depth, maxDepth) => {
+      if (depth >= maxDepth || pixels.length === 0) {
+        // 平均色を計算
+        let r = 0, g = 0, b = 0;
+        for (const pixel of pixels) {
+          r += pixel[0];
+          g += pixel[1];
+          b += pixel[2];
+        }
+        
+        const count = Math.max(1, pixels.length);
+        return [[Math.round(r / count), Math.round(g / count), Math.round(b / count)]];
+      }
+      
+      // 最大の分散を持つチャンネルを見つける
+      let rMin = 255, rMax = 0, gMin = 255, gMax = 0, bMin = 255, bMax = 0;
+      for (const pixel of pixels) {
+        rMin = Math.min(rMin, pixel[0]);
+        rMax = Math.max(rMax, pixel[0]);
+        gMin = Math.min(gMin, pixel[1]);
+        gMax = Math.max(gMax, pixel[1]);
+        bMin = Math.min(bMin, pixel[2]);
+        bMax = Math.max(bMax, pixel[2]);
+      }
+      
+      const rRange = rMax - rMin;
+      const gRange = gMax - gMin;
+      const bRange = bMax - bMin;
+      
+      let channel;
+      if (rRange >= gRange && rRange >= bRange) {
+        channel = 0; // R
+      } else if (gRange >= rRange && gRange >= bRange) {
+        channel = 1; // G
+      } else {
+        channel = 2; // B
+      }
+      
+      // ピクセルを選択したチャンネルでソート
+      pixels.sort((a, b) => a[channel] - b[channel]);
+      
+      // 中央で分割
+      const mid = Math.floor(pixels.length / 2);
+      const set1 = pixels.slice(0, mid);
+      const set2 = pixels.slice(mid);
+      
+      // 再帰的に分割を続ける
+      return [
+        ...splitColorSpace(set1, depth + 1, maxDepth),
+        ...splitColorSpace(set2, depth + 1, maxDepth)
+      ];
+    };
+    
+    // 最大色数に基づいて必要な深さを計算
+    const maxDepth = Math.ceil(Math.log2(maxColors));
+    
+    // 色空間を分割
+    const palette = splitColorSpace(pixels, 0, maxDepth);
+    
+    // 各ピクセルに最も近い色のインデックスを割り当て
+    const indexedPixels = new Uint8Array(pixels.length);
+    for (let i = 0; i < pixels.length; i++) {
+      const pixel = pixels[i];
+      let bestIndex = 0;
+      let bestDistance = Number.MAX_VALUE;
+      
+      for (let j = 0; j < palette.length; j++) {
+        const color = palette[j];
+        // ユークリッド距離
+        const distance = 
+          Math.pow(pixel[0] - color[0], 2) + 
+          Math.pow(pixel[1] - color[1], 2) + 
+          Math.pow(pixel[2] - color[2], 2);
+        
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = j;
+        }
+      }
+      
+      indexedPixels[i] = bestIndex;
+    }
+    
+    return { palette, indexedPixels };
+  },
+  
+  /**
+   * 特定の色のマスク画像を作成
+   * @param {Uint8Array} indexedPixels - 色インデックス付きピクセル
+   * @param {Number} colorIndex - 対象の色インデックス
+   * @param {Number} width - 画像の幅
+   * @param {Number} height - 画像の高さ
+   * @returns {ImageData} 二値マスク画像
+   * @private
+   */
+  _createColorMask: function(indexedPixels, colorIndex, width, height) {
+    const maskData = new Uint8ClampedArray(width * height * 4);
+    
+    for (let i = 0; i < indexedPixels.length; i++) {
+      const baseIndex = i * 4;
+      const value = indexedPixels[i] === colorIndex ? 0 : 255; // マスクは黒（0）が対象領域
+      
+      maskData[baseIndex] = value;
+      maskData[baseIndex + 1] = value;
+      maskData[baseIndex + 2] = value;
+      maskData[baseIndex + 3] = 255; // アルファは常に不透明
+    }
+    
+    return new ImageData(maskData, width, height);
+  },
+  
+  /**
+   * RGBを16進数カラーコードに変換
+   * @param {Number} r - 赤成分（0-255）
+   * @param {Number} g - 緑成分（0-255）
+   * @param {Number} b - 青成分（0-255）
+   * @returns {String} 16進数カラーコード
+   * @private
+   */
+  _rgbToHex: function(r, g, b) {
+    return '#' + [r, g, b]
+      .map(x => {
+        const hex = Math.max(0, Math.min(255, Math.round(x))).toString(16);
+        return hex.length === 1 ? '0' + hex : hex;
+      })
+      .join('');
+  },
+  
+  /**
+   * 代替カラー処理：Base64画像埋め込み
+   * @param {ImageData} imageData - 画像データ
+   * @param {Object} options - 変換オプション
+   * @param {Function} updateProgress - 進捗更新関数
+   * @returns {Promise<String>} SVG文字列
+   * @private
+   */
+  _createSimpleColorSVG: function(imageData, options, updateProgress) {
+    return new Promise((resolve) => {
+      try {
         // 簡易実装：カラー画像はbase64化してSVGに埋め込む
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -259,7 +598,9 @@ const ImageTracer = {
         resolve(svg);
       } catch (error) {
         console.error('カラー変換エラー:', error);
-        reject(error);
+        // エラーが発生した場合でも最低限のSVGを返す
+        const svg = this._createEmptySVG(imageData.width, imageData.height);
+        resolve(svg);
       }
     });
   },
