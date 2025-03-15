@@ -30,18 +30,58 @@
         return;
       }
       
+      // 画像形式をログ出力（デバッグ用）
+      console.log('画像形式:', file.type);
+      
       const img = new Image();
-      const objectURL = URL.createObjectURL(file);
+      let objectURL = null;
+      
+      // CORS設定を追加
+      img.crossOrigin = 'anonymous';
       
       img.onload = function() {
+        // 読み込み成功時にはBlobURLをメモリから解放
+        if (objectURL) {
+          setTimeout(() => {
+            URL.revokeObjectURL(objectURL);
+          }, 100);
+        }
         resolve(img);
       };
       
-      img.onerror = function() {
-        URL.revokeObjectURL(objectURL);
-        reject(new Error('画像の読み込みに失敗しました。'));
+      img.onerror = function(error) {
+        // 読み込み失敗時にはエラーログ出力
+        console.error('画像読み込みエラー:', error);
+        
+        // BlobURLをメモリから解放
+        if (objectURL) {
+          URL.revokeObjectURL(objectURL);
+        }
+        
+        // FileReaderを使った代替読み込み方法を試行
+        const reader = new FileReader();
+        
+        reader.onload = function(event) {
+          img.onload = function() {
+            resolve(img);
+          };
+          
+          img.onerror = function() {
+            reject(new Error('画像の読み込みに失敗しました。サポートされていない形式かファイルが破損している可能性があります。'));
+          };
+          
+          img.src = event.target.result;
+        };
+        
+        reader.onerror = function() {
+          reject(new Error('ファイルの読み込みに失敗しました。'));
+        };
+        
+        reader.readAsDataURL(file);
       };
       
+      // BlobURLを作成して画像を読み込む
+      objectURL = URL.createObjectURL(file);
       img.src = objectURL;
     });
   };

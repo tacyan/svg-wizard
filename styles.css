@@ -210,7 +210,7 @@ header h1 {
   margin-bottom: 30px;
 }
 
-.preview-section {
+.preview-item {
   flex: 1;
   min-width: 300px;
   background-color: var(--container-bg);
@@ -219,12 +219,12 @@ header h1 {
   padding: 20px;
 }
 
-.preview-section h3 {
+.preview-item h3 {
   margin-bottom: 15px;
   color: var(--primary-color);
 }
 
-.image-preview, .svg-preview {
+.preview-box {
   width: 100%;
   height: 300px;
   overflow: auto;
@@ -238,12 +238,31 @@ header h1 {
                     linear-gradient(45deg, #ececec 25%, transparent 25%, transparent 75%, #ececec 75%, #ececec);
   background-size: 20px 20px;
   background-position: 0 0, 10px 10px;
+  padding: 10px;
 }
 
-.image-preview img, .svg-preview svg {
+#original-image {
   max-width: 100%;
-  max-height: 100%;
+  max-height: 280px;
+  display: block;
   object-fit: contain;
+}
+
+/* SVGプレビュー内のSVG要素のスタイル */
+#svg-preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#svg-preview svg {
+  max-width: 100%;
+  max-height: 280px;
+  display: block;
+  object-fit: contain;
+  margin: 0 auto;
 }
 
 /* レイヤー管理のスタイル */
@@ -344,26 +363,32 @@ header h1 {
 /* プログレスバーのスタイル */
 .progress-container {
   margin: 20px 0;
+  background-color: var(--container-bg);
+  border-radius: var(--border-radius);
+  padding: 15px;
+  box-shadow: var(--shadow);
+}
+
+.progress-bar-container {
+  width: 100%;
+  height: 10px;
+  background-color: #e9ecef;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 10px;
 }
 
 .progress-bar {
-  height: 10px;
-  background-color: var(--border-color);
-  border-radius: 5px;
-  overflow: hidden;
-}
-
-.progress {
   height: 100%;
   background-color: var(--primary-color);
   width: 0%;
   transition: width 0.3s ease;
 }
 
-#progress-text {
+.progress-text {
   text-align: center;
-  margin-top: 10px;
   font-size: 14px;
+  color: var(--text-color);
 }
 
 /* コントロールパネルのスタイル */
@@ -456,7 +481,7 @@ footer {
     flex-direction: column;
   }
   
-  .preview-section {
+  .preview-item {
     min-width: auto;
   }
   
@@ -493,6 +518,7 @@ footer {
   flex-direction: column;
   align-items: center;
   color: #e74c3c;
+  animation: fadeIn 0.3s ease-in;
 }
 
 .error-message .icon {
@@ -504,16 +530,82 @@ footer {
   text-align: center;
   margin-bottom: 12px;
   font-weight: 500;
+  color: #c0392b;
 }
 
 .error-message .action-button {
   background-color: #e74c3c;
   color: white;
   margin-top: 8px;
+  transition: all 0.2s ease;
 }
 
 .error-message .action-button:hover {
   background-color: #c0392b;
+  transform: translateY(-2px);
+}
+
+/* 技術的詳細情報のスタイル */
+.error-message .tech-info {
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid #f1c40f;
+  border-radius: 4px;
+  padding: 10px;
+  background-color: rgba(241, 196, 15, 0.1);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.error-message .tech-info summary {
+  font-weight: 500;
+  color: #7f8c8d;
+  text-align: center;
+  outline: none;
+  cursor: pointer;
+  padding: 5px;
+}
+
+.error-message .tech-info summary:hover {
+  color: #2c3e50;
+}
+
+.error-message .tech-info .info-content {
+  margin-top: 10px;
+  color: #7f8c8d;
+  text-align: left;
+  font-size: 0.9rem;
+  background-color: #fff;
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.error-message .tech-info .info-content p {
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.error-message .tech-info .info-content strong {
+  color: #2c3e50;
+}
+
+.error-message .tech-info .info-content ul {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.error-message .tech-info .info-content li {
+  margin: 4px 0;
+  line-height: 1.5;
+}
+
+.error-message .tech-info .info-content code {
+  background-color: #f8f9fa;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.9em;
+  color: #e74c3c;
 }
 
 /* ボタンスタイルの修正 */
@@ -612,6 +704,47 @@ footer {
   opacity: 0.7;
   box-shadow: none;
   transform: none;
+}
+
+/* secondary-button クラスの定義（リセットボタンで使用） */
+.secondary-button {
+  background-color: #f8f9fa;
+  color: #6c757d;
+  border: 1px solid #6c757d;
+  border-radius: 4px;
+  padding: 10px 20px;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.secondary-button:hover {
+  background-color: #e2e6ea;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.secondary-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* small-button クラスの定義（レイヤー管理ボタンで使用） */
+.small-button {
+  padding: 6px 12px;
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background-color 0.2s;
+}
+
+.small-button:hover {
+  background-color: var(--secondary-color);
 }
 
 /* アニメーション */
