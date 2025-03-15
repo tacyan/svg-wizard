@@ -82,7 +82,24 @@
     </div>
 
     <!-- Potraceライブラリ -->
-    <script src="https://cdn.jsdelivr.net/npm/potrace@2.1.8/potrace.min.js"></script>
+    <script>
+        // Potraceライブラリの読み込み状態を確認するためのフラグ
+        window.potraceLoaded = false;
+        
+        // Potraceライブラリの読み込みが成功した場合の処理
+        function potraceLoadSuccess() {
+            console.log('Potraceライブラリの読み込みが成功しました');
+            window.potraceLoaded = true;
+        }
+        
+        // Potraceライブラリの読み込みが失敗した場合の処理
+        function potraceLoadError() {
+            console.warn('Potraceライブラリの読み込みに失敗しました。代替処理が使用されます。');
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/potrace@2.1.8/potrace.min.js" 
+            onload="potraceLoadSuccess()" 
+            onerror="potraceLoadError()"></script>
     <script src="imagetracer.js"></script>
     <script src="app.js"></script>
 </body>

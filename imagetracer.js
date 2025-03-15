@@ -89,12 +89,16 @@ const ImageTracer = {
       try {
         updateProgress(20);
         
-        // Potraceインスタンスの作成
-        const potrace = window.Potrace ? window.Potrace.Potrace.getInstance() : null;
-        
-        if (!potrace) {
-          throw new Error('Potraceライブラリが見つかりません');
+        // Potraceライブラリのチェック - より堅牢な検出方法と読み込み状態フラグの確認
+        if (typeof window.Potrace === 'undefined' || window.potraceLoaded === false) {
+          console.warn('Potraceライブラリが利用できません。代替処理を使用します。');
+          // ライブラリが利用できない場合は、代替として簡易的な白黒SVGを生成
+          return this._fallbackBWProcess(imageData, options, updateProgress)
+            .then(svgData => resolve(svgData));
         }
+        
+        // Potraceインスタンスの作成
+        const potrace = window.Potrace.Potrace.getInstance();
         
         // Potraceのパラメータ設定
         potrace.setParameters({
@@ -132,8 +136,62 @@ const ImageTracer = {
           resolve(svgData);
         });
       } catch (error) {
-        reject(error);
+        console.error('Potrace処理エラー:', error);
+        // エラーが発生した場合は代替処理を試みる
+        this._fallbackBWProcess(imageData, options, updateProgress)
+          .then(svgData => resolve(svgData))
+          .catch(err => reject(err));
       }
+    });
+  },
+  
+  /**
+   * Potraceが利用できない場合の代替白黒処理
+   * @param {ImageData} imageData - 画像データ
+   * @param {Object} options - 変換オプション
+   * @param {Function} updateProgress - 進捗更新関数
+   * @returns {Promise<String>} SVG文字列
+   * @private
+   */
+  _fallbackBWProcess: function(imageData, options, updateProgress) {
+    return new Promise((resolve) => {
+      updateProgress(30);
+      
+      // 簡易実装：白黒画像の場合は閾値処理を行いグレースケール化
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      canvas.width = imageData.width;
+      canvas.height = imageData.height;
+      ctx.putImageData(imageData, 0, 0);
+      
+      // 閾値処理（白黒化）
+      const newImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = newImageData.data;
+      const threshold = options.threshold;
+      
+      for (let i = 0; i < data.length; i += 4) {
+        // グレースケール値の計算
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        // 閾値と比較して白か黒にする
+        const value = gray >= threshold ? 255 : 0;
+        data[i] = data[i + 1] = data[i + 2] = value;
+      }
+      
+      ctx.putImageData(newImageData, 0, 0);
+      
+      updateProgress(60);
+      
+      // Base64形式の画像データを取得
+      const base64Image = canvas.toDataURL('image/png');
+      
+      // SVGの生成
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${imageData.width}" height="${imageData.height}" viewBox="0 0 ${imageData.width} ${imageData.height}">
+        <image width="${imageData.width}" height="${imageData.height}" href="${base64Image}"/>
+      </svg>`;
+      
+      updateProgress(100);
+      resolve(svg);
     });
   },
   
