@@ -3,7 +3,7 @@
  * 
  * このスクリプトは画像をSVG形式に変換するWebアプリケーションのメイン機能を実装しています。
  * 主な機能：
- * - 画像ファイルのドラッグ＆ドロップおよびファイル選択によるアップロード
+ * - JPG、PNG、GIF、WebP画像ファイルのドラッグ＆ドロップおよびファイル選択によるアップロード
  * - 画像のSVG形式への変換処理（Potraceライブラリを使用）
  * - 変換進捗の表示
  * - 元画像とSVG変換結果のプレビュー表示
@@ -115,6 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     currentFile = file;
     console.log('ファイル処理開始:', file.name);
+    console.log('ファイル形式:', file.type);
     
     // ファイル名を表示
     uploadArea.innerHTML = `<p>${file.name}</p><p>${(file.size / 1024).toFixed(2)} KB</p>`;
